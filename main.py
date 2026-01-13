@@ -2,13 +2,13 @@ import numpy as np
 from opt_einsum import contract
 from read_snt_io import read_snt, generate_m_scheme, decouple_1b, decouple_2b,recouple_2b
 from hf import hartree_fock, normal_order
-from cc import ccsd, ccd, mp2, ccsdt
+from cc import ccsd, ccd, mp2, ccsdt, ccsdtq
 from lambda_ccsd import lambda_ccsd, compute_properties
 from lambda_ccsdt import lambda_ccsdt
 from similarity_transform import similarity_transform_t1, similarity_transform_t1_t2, similarity_transform_l1
 
 def main():
-    snt_file = "usdb.snt"
+    snt_file = "gxpf1a.snt"
     
     print("--- 1. Reading SNT Interaction ---")
     orbits, potential = read_snt(snt_file)
@@ -29,14 +29,18 @@ def main():
     print(f"m-scheme v2b shape: {v2b_m.shape}")
     
     # Z=2, N=2 for Ne-20 relative to O16 core
-    Z_val = 2
-    N_val = 2
+    Z_val = 8
+    N_val = 8
     
     # Custom initial occupation (set to None for automatic energy-based)
     # Example: occ_indices = [0, 1, 6, 7] for Z=2, N=2
     #occ_indices = [4,5,6,7,8,9,16,17,18,19,20,21]
-
-    occ_indices = [4,5,16,17]
+    #occ_indices = [4,5,16,17]
+    occ_indices=[]
+    for i in range(8):
+        occ_indices.append(i)
+    for i in range(8):
+        occ_indices.append(i+20)
     
     print(f"\n--- 4. Performing Hartree-Fock (Z={Z_val}, N={N_val}) ---")
     hf_energy, sp_energies, rho, sp_coeffs = hartree_fock(m_basis, potential, Z_val, N_val, 
@@ -79,15 +83,8 @@ def main():
     print(f"\nCCSD Correlation Energy: {e_corr:.6f} MeV")
     print(f"Total CCSD Energy: {no_ham.E0 + e_corr:.6f} MeV")
 
-#    print("\n--- 6c. Solving Lambda-CCSD Equations ---")
-#    l1, l2 = lambda_ccsd(no_ham, t1, t2, n_occ, max_iter=100)
-#    
-#    print("\n--- 6d. Computing Properties with Lambda Amplitudes ---")
-#    props = compute_properties(no_ham, t1, t2, l1, l2, n_occ)
-#    print(f"One-body expectation: {props['f_expectation']:.6f} MeV")
-#    print(f"Particle number: {props['n_particle']:.6f}")
-#    print(f"Hole density trace: {np.trace(props['rho_oo']):.6f}")
-#    print(f"Particle density trace: {np.trace(props['rho_vv']):.6f}")
+    l1_t, l2_t = lambda_ccsd(no_ham, t1, t2,  n_occ, max_iter=30)
+    
 
 if __name__ == "__main__":
 

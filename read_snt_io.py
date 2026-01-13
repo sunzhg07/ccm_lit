@@ -289,7 +289,7 @@ def decouple_2b(j_potential, m_scheme):
             
             # Outer product of CGs scaled by val and nas_factor
             # V_m(a,b,c,d) += CG_ab * CG_cd * val * nas_factor
-            v_base = val * nas_factor
+            v_base = val*((42./56)**(0.30)) * nas_factor
             for i, (a, b) in enumerate(labels_ab):
                 idx_ab = a * n_m + b
                 idx_ba = b * n_m + a
