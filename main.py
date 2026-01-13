@@ -1,8 +1,11 @@
 import numpy as np
+from opt_einsum import contract
 from read_snt_io import read_snt, generate_m_scheme, decouple_1b, decouple_2b,recouple_2b
 from hf import hartree_fock, normal_order
-from cc import ccsd, ccd, mp2
+from cc import ccsd, ccd, mp2, ccsdt
 from lambda_ccsd import lambda_ccsd, compute_properties
+from lambda_ccsdt import lambda_ccsdt
+from similarity_transform import similarity_transform_t1, similarity_transform_t1_t2, similarity_transform_l1
 
 def main():
     snt_file = "usdb.snt"
@@ -76,33 +79,17 @@ def main():
     print(f"\nCCSD Correlation Energy: {e_corr:.6f} MeV")
     print(f"Total CCSD Energy: {no_ham.E0 + e_corr:.6f} MeV")
 
-    print("\n--- 6c. Solving Lambda-CCSD Equations ---")
-    l1, l2 = lambda_ccsd(no_ham, t1, t2, n_occ, max_iter=100)
-    
-    print("\n--- 6d. Computing Properties with Lambda Amplitudes ---")
-    props = compute_properties(no_ham, t1, t2, l1, l2, n_occ)
-    print(f"One-body expectation: {props['f_expectation']:.6f} MeV")
-    print(f"Particle number: {props['n_particle']:.6f}")
-    print(f"Hole density trace: {np.trace(props['rho_oo']):.6f}")
-    print(f"Particle density trace: {np.trace(props['rho_vv']):.6f}")
-
-    print("\n--- 7. Verifying J-Scheme Reconstruction ---")
-    print("Recoupling M-scheme interaction back to J-scheme...")
-    recoupled = recouple_2b(v2b_m, m_basis, potential)
-    
-    print(f"{'Orbits (r s t u)':<15} | {'J':<2} | {'Original':<12} | {'Recoupled':<12} | {'Diff':<10}")
-    print("-" * 65)
-    max_diff = 0
-    for i, entry in enumerate(potential.v2b):
-        orig = entry[5]
-        reco = recoupled[i][5]
-        diff = abs(orig - reco)
-        max_diff = max(max_diff, diff)
-        if i < 10 or diff > 1e-6: # Print first 10 or any with significant difference
-            label = f"{entry[0]+1},{entry[1]+1} {entry[2]+1},{entry[3]+1}"
-            print(f"{label:<15} | {entry[4]:<2} | {orig:12.6f} | {reco:12.6f} | {diff:10.2e}")
-            
-    print(f"\nMax Difference in J-scheme reconstruction: {max_diff:.2e}")
+#    print("\n--- 6c. Solving Lambda-CCSD Equations ---")
+#    l1, l2 = lambda_ccsd(no_ham, t1, t2, n_occ, max_iter=100)
+#    
+#    print("\n--- 6d. Computing Properties with Lambda Amplitudes ---")
+#    props = compute_properties(no_ham, t1, t2, l1, l2, n_occ)
+#    print(f"One-body expectation: {props['f_expectation']:.6f} MeV")
+#    print(f"Particle number: {props['n_particle']:.6f}")
+#    print(f"Hole density trace: {np.trace(props['rho_oo']):.6f}")
+#    print(f"Particle density trace: {np.trace(props['rho_vv']):.6f}")
 
 if __name__ == "__main__":
+
     main()
+#write a function to transform a operator with one body and twobody with \Lambda_1 a deexcitation operator
