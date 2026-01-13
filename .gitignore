@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.env
+.venv/
+env/
+venv/
+
+# macOS
+.DS_Store
+
+# VSCode
+.vscode/
+
+# data files
+*.snt
