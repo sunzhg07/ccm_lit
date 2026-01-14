@@ -12,6 +12,8 @@ A Python implementation of Coupled Cluster methods (CCSD, CCSDT) and their Lambd
     -   **CCD:** Coupled Cluster Doubles.
     -   **CCSD:** Coupled Cluster Singles and Doubles.
     -   **CCSDT:** Coupled Cluster Singles, Doubles, and Triples (full iterative solution).
+    -   **CCSDTQ:** Coupled Cluster Singles, Doubles, Triples, and Quadruples.
+    -   **CCDQ:** Coupled Cluster Doubles and Quadruples (unusual truncation, no singles/triples). See `CCDQ_README.md` for details.
 -   **Properties:**
     -   **Lambda Equations:** Solution of the left-hand eigenvector equations ($\Lambda$-CCSD, $\Lambda$-CCSDT).
     -   **Density Matrices:** Computation of 1-body and 2-body density matrices.
