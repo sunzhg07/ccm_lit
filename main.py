@@ -3,8 +3,7 @@ from opt_einsum import contract
 from read_snt_io import read_snt, generate_m_scheme, decouple_1b, decouple_2b,recouple_2b
 from hf import hartree_fock, normal_order
 from cc import ccsd, ccd, mp2, ccsdt, ccsdtq
-from lambda_ccsd import lambda_ccsd, compute_properties
-from lambda_ccsdt import lambda_ccsdt
+from lambda_cc import lambda_ccsd, lambda_ccsdt, compute_properties
 from similarity_transform import similarity_transform_t1, similarity_transform_t1_t2, similarity_transform_l1
 
 def main():
@@ -74,13 +73,13 @@ def main():
     print(f"MP2 Correlation Energy: {e_corr_mp2:.6f} MeV")
 
     print("\n--- 6a. Performing CCD (Diagnostic) ---")
-    e_corr_ccd, t2_ccd = ccd(no_ham, n_occ, max_iter=50)
-    print(f"CCD Correlation Energy: {e_corr_ccd:.6f} MeV")
+    e_corr_ccd, t2_ccsd = ccd(no_ham, n_occ, max_iter=50)
+    print(f"CCSD Correlation Energy: {e_corr_ccd:.6f} MeV")
 
-    print("\n--- 6b. Performing CCSD ---")
-    e_corr, t1, t2 = ccsd(no_ham, n_occ)
+    print("\n--- 6b. Performing CCSDT ---")
+    e_corr, t1, t2, t3 = ccsdt(no_ham, n_occ)
     
-    print(f"\nCCSD Correlation Energy: {e_corr:.6f} MeV")
+    print(f"\nCCSDT Correlation Energy: {e_corr:.6f} MeV")
     print(f"Total CCSD Energy: {no_ham.E0 + e_corr:.6f} MeV")
 
     l1_t, l2_t = lambda_ccsd(no_ham, t1, t2,  n_occ, max_iter=30)

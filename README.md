@@ -26,8 +26,7 @@ A Python implementation of Coupled Cluster methods (CCSD, CCSDT) and their Lambd
 -   `read_snt_io.py`: Handles parsing of SNT files and transformation of J-scheme matrix elements to M-scheme.
 -   `hf.py`: Implements the Hartree-Fock self-consistent field procedure.
 -   `cc.py`: Contains the iterative solvers for CCSD and CCSDT amplitudes ($T_1, T_2, T_3$).
--   `lambda_ccsd.py`: Solves the $\Lambda_1$ and $\Lambda_2$ equations for CCSD properties.
--   `lambda_ccsdt.py`: Solves the $\Lambda$-CCSDT equations including $\Lambda_3$.
+-   `lambda_cc.py`: Solves the $\Lambda$-CCSD and $\Lambda$-CCSDT equations ($\Lambda_1, \Lambda_2, \Lambda_3$) and computes density matrices.
 -   `similarity_transform.py`: Utilities for computing similarity transformed operators (e.g., $\bar{H}$).
 
 ## Theoretical Background and Equations
