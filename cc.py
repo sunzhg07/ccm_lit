@@ -625,14 +625,11 @@ def ccsdtq(no_ham, n_occ, max_iter=100, tol=1e-8, alpha=0.3):
     return e_corr, t1, t2, t3, t4
 
 
-def ccdq(no_ham, n_occ, max_iter=100, tol=1e-8, alpha=0.3, t4_threshold=1e-10):
+def ccdq(no_ham, n_occ, max_iter=100, tol=1e-8, alpha=0.3, initial_t2=None):
     """
-    CCDQ (Coupled Cluster Doubles and Quadruples) solver with SPARSE T4.
+    CCDQ (Coupled Cluster Doubles and Quadruples) solver.
     Includes only T2 (doubles) and T4 (quadruples) amplitudes.
     NO singles (T1) or triples (T3). This is an unusual truncation.
-    
-    Memory-optimized version using sparse matrices for T4 storage.
-    T4 is stored as CSR matrix: row=(i,j,k,l), col=(a,b,c,d)
     """
     n_states = no_ham.f.shape[0]
     o = slice(0, n_occ)
@@ -644,278 +641,144 @@ def ccdq(no_ham, n_occ, max_iter=100, tol=1e-8, alpha=0.3, t4_threshold=1e-10):
     
     eps = np.diag(f)
     f_off = f - np.diag(eps)
+    f_oo = f_off[o, o]
+    f_vv = f_off[v, v]
+    f_ov = f_off[o, v]
+    f_vo = f_off[v, o]
     
     # Energy denominators
+    # D2: for doubles (ijab)
     D2 = eps[o, None, None, None] + eps[None, o, None, None] - \
          eps[None, None, v, None] - eps[None, None, None, v]
     
+    # D4: for quadruples (ijklabcd)
     e_o = eps[o]
     e_v = eps[v]
+    D4 = (e_o[:,None,None,None,None,None,None,None] + 
+          e_o[None,:,None,None,None,None,None,None] + 
+          e_o[None,None,:,None,None,None,None,None] + 
+          e_o[None,None,None,:,None,None,None,None] -
+          e_v[None,None,None,None,:,None,None,None] - 
+          e_v[None,None,None,None,None,:,None,None] - 
+          e_v[None,None,None,None,None,None,:,None] - 
+          e_v[None,None,None,None,None,None,None,:])
+
+    # Initial Amplitudes
+    if initial_t2 is not None:
+        print("[CCDQ] Initializing T2 from provided guess (CCD)")
+        t2 = initial_t2.copy()
+    else:
+        t2 = v2b[o, o, v, v] / D2
+        
+    t4 = np.zeros((n_occ, n_occ, n_occ, n_occ, n_virt, n_virt, n_virt, n_virt))
     
-    # Encoding/decoding functions for sparse T4
-    def encode_row(i, j, k, l):
-        """Map (i,j,k,l) -> row index"""
-        return ((i * n_occ + j) * n_occ + k) * n_occ + l
-    
-    def encode_col(a, b, c, d):
-        """Map (a,b,c,d) -> col index"""
-        return ((a * n_virt + b) * n_virt + c) * n_virt + d
-    
-    def decode_row(row):
-        """Map row index -> (i,j,k,l)"""
-        l = row % n_occ
-        row //= n_occ
-        k = row % n_occ
-        row //= n_occ
-        j = row % n_occ
-        i = row // n_occ
-        return i, j, k, l
-    
-    def decode_col(col):
-        """Map col index -> (a,b,c,d)"""
-        d = col % n_virt
-        col //= n_virt
-        c = col % n_virt
-        col //= n_virt
-        b = col % n_virt
-        a = col // n_virt
-        return a, b, c, d
-    
-    def compute_D4(i, j, k, l, a, b, c, d):
-        """Compute energy denominator for a specific T4 element"""
-        return e_o[i] + e_o[j] + e_o[k] + e_o[l] - e_v[a] - e_v[b] - e_v[c] - e_v[d]
-    
-    # Initial amplitudes
-    t2 = v2b[o, o, v, v] / D2
-    
-    # T4 stored as sparse matrix: shape (n_occ^4, n_virt^4)
-    t4_shape = (n_occ**4, n_virt**4)
-    t4 = sparse.csr_matrix(t4_shape)
-    
-    # Calculate potential memory usage
-    dense_size_gb = (n_occ**4 * n_virt**4 * 8) / 1e9
-    print(f"\n[CCDQ Sparse] Dense T4 would be: {dense_size_gb:.2f} GB")
-    print(f"[CCDQ Sparse] Using sparse storage (threshold={t4_threshold:.1e})")
+    t4_size_gb = t4.nbytes / 1e9
+    print(f"\n[CCDQ] T4 array size: {t4_size_gb:.2f} GB")
+    if t4_size_gb > 8.0:
+        print("[CCDQ WARNING] T4 is huge. This might crash.")
 
     old_e = 0.0
-    print(f"\n[CCDQ] {'Iter':>4} | {'E_corr':>15} | {'Delta E':>12} | {'nnz(T4)':>10} | {'T4 size':>10} | {'sparsity':>10}")
-    print("-" * 90)
+    print(f"\n[CCDQ] {'Iter':>4} | {'E_corr':>15} | {'Delta E':>12} | {'|T4|':>10}")
+    print("-" * 65)
     
     for iteration in range(max_iter):
-        # Energy (only from T2)
+        # Energy (determined by T2 only, since we have no T1)
+        # E_corr = 0.25 * sum_ijab <ij||ab> t_ijab
         e_corr = 0.25 * np.sum(v2b[o, o, v, v] * t2)
         
         delta_e = abs(e_corr - old_e)
-        nnz_t4 = t4.nnz
-        t4_size_mb = (nnz_t4 * 8 * 3) / 1e6  # data + row + col indices
-        sparsity = 100.0 * (1.0 - nnz_t4 / (n_occ**4 * n_virt**4)) if n_occ > 0 and n_virt > 0 else 100.0
-        
-        print(f"[CCDQ] {iteration:4d} | {e_corr:15.8f} | {delta_e:12.4e} | {nnz_t4:10d} | {t4_size_mb:8.2f} MB | {sparsity:9.2f}%")
+        t4_norm = np.linalg.norm(t4)
+        print(f"[CCDQ] {iteration:4d} | {e_corr:15.8f} | {delta_e:12.4e} | {t4_norm:10.4e}")
         
         if delta_e < tol:
             print("[CCDQ] Converged!")
             return e_corr, t2, t4
             
         # --- T2 Residual ---
+        # Standard CCD terms plus feedback from T4
         r2 = v2b[o, o, v, v].copy()
+        
+        # Particle-particle ladder: 0.5 * <ab||ef> t_ijef
         r2 += 0.5 * contract('abef,ijef->ijab', v2b[v, v, v, v], t2)
+        
+        # Hole-hole ladder: 0.5 * <mn||ij> t_mnab
         r2 += 0.5 * contract('mnij,mnab->ijab', v2b[o, o, o, o], t2)
+        
+        # Ring/Exchange term: -P(ij)P(ab) <ma||ie> t_mjeb
         term = contract('maie,mjeb->ijab', v2b[o, v, o, v], t2)
         r2 -= pIJ(pAB(term))
         
-        # T4 feedback to T2 (sparse contraction)
-        if nnz_t4 > 0:
-            # Convert sparse T4 to temporary dense for contraction
-            # Only contract non-zero elements
-            t4_coo = t4.tocoo()
-            t4_contrib = np.zeros_like(t2)
-            
-            for idx in range(nnz_t4):
-                row_idx = t4_coo.row[idx]
-                col_idx = t4_coo.col[idx]
-                val = t4_coo.data[idx]
-                
-                i, j, m, n = decode_row(row_idx)
-                a, b, e, f = decode_col(col_idx)
-                
-                # Contract: <mn||ef> t4_ijmnabef -> r2_ijab
-                t4_contrib[i, j, a, b] += v2b[m, n, e, f] * val
-            
-            r2 += 0.0625 * t4_contrib
+        # T4 contribution to T2: Contract T4 with 2-body interaction
+        # This is the key coupling that distinguishes CCDQ from CCD
+        # Term: 0.0625 * <mn||ef> t_ijmnabef
+        # This represents the feedback from quadruples to doubles
+        if t4_norm > 1e-12:
+            r2 += 0.0625 * contract('mnef,ijmnabef->ijab', v2b[o, o, v, v], t4)
         
-        # --- T4 Residual (build sparse with PARALLEL threading) ---
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import threading
+        # --- T4 Residual ---
+        # Source terms for T4 in the absence of T1 and T3
+        r4 = np.zeros_like(t4)
         
-        # Thread-safe lists for collecting results
-        r4_data_lock = threading.Lock()
-        r4_data, r4_rows, r4_cols = [], [], []
+        # (1) Disconnected T2*T2 products (leading order source for T4)
+        # These are the dominant terms that generate T4 from T2
+        # Term: P(ij/kl) P(ab/cd) <ij||ab> t_klcd
+        # This is a simplified approximation; full term requires proper antisymmetrization
         
-        def compute_pp_ladder_chunk(ijkl_indices):
-            """Compute PP-ladder contribution for a chunk of (i,j,k,l) indices"""
-            local_data, local_rows, local_cols = [], [], []
-            
-            for i, j, k, l in ijkl_indices:
-                # PP contribution: <ab||ef> t2_ijef t2_klcd (sum over ef)
-                for a in range(n_virt):
-                    for b in range(n_virt):
-                        # Compute sum over ef: <ab||ef> * t2[i,j,ef]
-                        contract_val = np.sum(v2b[a+n_occ, b+n_occ, n_occ:, n_occ:] * t2[i, j])
-                        
-                        for c in range(n_virt):
-                            for d in range(n_virt):
-                                val = contract_val * t2[k, l, c, d]
-                                
-                                if abs(val) > t4_threshold:
-                                    local_data.append(0.25 * val)
-                                    local_rows.append(encode_row(i, j, k, l))
-                                    local_cols.append(encode_col(a, b, c, d))
-            
-            return local_data, local_rows, local_cols
+        # Particle-particle ladder from two T2's
+        # 0.5 * <ab||ef> <cd||gh> t_ijef t_klgh -> contracts to give t_ijklabcd
+        # Simplified: outer product type terms
+        for i in range(n_occ):
+            for j in range(n_occ):
+                for k in range(n_occ):
+                    for l in range(n_occ):
+                        # Virtual-virtual interaction coupled with T2
+                        # <ef||gh> t_ijef t_klgh
+                        term_vv = contract('efgh,ef,gh->efgh', 
+                                          v2b[v, v, v, v], 
+                                          t2[i, j], 
+                                          t2[k, l])
+                        r4[i, j, k, l] += 0.25 * term_vv
         
-        def compute_hh_ladder_chunk(abcd_indices):
-            """Compute HH-ladder contribution for a chunk of (a,b,c,d) indices"""
-            local_data, local_rows, local_cols = [], [], []
-            
-            for a, b, c, d in abcd_indices:
-                # HH contribution: <ij||mn> t2_mnab t2_klcd (sum over mn)
-                for i in range(n_occ):
-                    for j in range(n_occ):
-                        # Compute sum over mn: <ij||mn> * t2[mn,a,b]
-                        contract_val = np.sum(v2b[i, j, :n_occ, :n_occ] * t2[:, :, a, b])
-                        
-                        for k in range(n_occ):
-                            for l in range(n_occ):
-                                val = contract_val * t2[k, l, c, d]
-                                
-                                if abs(val) > t4_threshold:
-                                    local_data.append(0.25 * val)
-                                    local_rows.append(encode_row(i, j, k, l))
-                                    local_cols.append(encode_col(a, b, c, d))
-            
-            return local_data, local_rows, local_cols
+        # (2) Hole-hole ladder from two T2's
+        for a in range(n_virt):
+            for b in range(n_virt):
+                for c in range(n_virt):
+                    for d in range(n_virt):
+                        # Hole-hole interaction coupled with T2
+                        # <mn||op> t_mnab t_opcd
+                        term_oo = contract('mnop,ab,cd->mnop', 
+                                          v2b[o, o, o, o], 
+                                          t2[:, :, a, b],
+                                          t2[:, :, c, d])
+                        r4[:, :, :, :, a, b, c, d] += 0.25 * term_oo
         
-        # Use threading (works well with NumPy which releases GIL)
-        import os
-        n_threads = min(int(os.environ.get('OMP_NUM_THREADS', '8')), 8)
-        
-        # (1) PP-ladder: Parallelize over (i,j,k,l) combinations
-        ijkl_list = [(i, j, k, l) for i in range(n_occ) for j in range(n_occ) 
-                     for k in range(n_occ) for l in range(n_occ)]
-        
-        if len(ijkl_list) > 0:
-            # Split into chunks for threads
-            chunk_size = max(1, len(ijkl_list) // (n_threads * 2))
-            ijkl_chunks = [ijkl_list[i:i+chunk_size] for i in range(0, len(ijkl_list), chunk_size)]
-            
-            with ThreadPoolExecutor(max_workers=n_threads) as executor:
-                futures = [executor.submit(compute_pp_ladder_chunk, chunk) for chunk in ijkl_chunks]
-                
-                for future in as_completed(futures):
-                    data, rows, cols = future.result()
-                    r4_data.extend(data)
-                    r4_rows.extend(rows)
-                    r4_cols.extend(cols)
-        
-        # (2) HH-ladder: Parallelize over (a,b,c,d) combinations
-        abcd_list = [(a, b, c, d) for a in range(n_virt) for b in range(n_virt) 
-                     for c in range(n_virt) for d in range(n_virt)]
-        
-        if len(abcd_list) > 0:
-            # Split into chunks
-            chunk_size = max(1, len(abcd_list) // (n_threads * 2))
-            abcd_chunks = [abcd_list[i:i+chunk_size] for i in range(0, len(abcd_list), chunk_size)]
-            
-            with ThreadPoolExecutor(max_workers=n_threads) as executor:
-                futures = [executor.submit(compute_hh_ladder_chunk, chunk) for chunk in abcd_chunks]
-                
-                for future in as_completed(futures):
-                    data, rows, cols = future.result()
-                    r4_data.extend(data)
-                    r4_rows.extend(rows)
-                    r4_cols.extend(cols)
-        
-        
-        # (3) Mixed coupling: -<ma||ie> * t2_mjeb * t2_klcd
+        # (3) Mixed particle-hole coupling
+        # Term: -P(ij)P(kl)P(ab)P(cd) <ma||ie> t_mjeb t_klcd
+        # This couples T2 amplitudes through particle-hole interactions
+        # Simplified implementation without full permutation operators
+        # This is computationally expensive but necessary for proper T4 generation
         if n_occ > 0 and n_virt > 0:
-            # First contraction: temp_ijab = <ma||ie> * t2_mjeb
+            # Contract particle-hole type: <ma||ie> with two T2's
+            # r4_ijklabcd += -<ma||ie> * t2_mjeb * t2_klcd (and permutations)
             temp_2body = contract('maie,mjeb->ijab', v2b[o, v, o, v], t2)
-            
-            # Second contraction: r4_ijklabcd = -temp_ijab * t2_klcd
-            for i in range(n_occ):
-                for j in range(n_occ):
-                    for a in range(n_virt):
-                        for b in range(n_virt):
-                            if abs(temp_2body[i, j, a, b]) > t4_threshold:
-                                for k in range(n_occ):
-                                    for l in range(n_occ):
-                                        for c in range(n_virt):
-                                            for d in range(n_virt):
-                                                if abs(t2[k, l, c, d]) > t4_threshold:
-                                                    val = -temp_2body[i, j, a, b] * t2[k, l, c, d]
-                                                    if abs(val) > t4_threshold:
-                                                        r4_data.append(val)
-                                                        r4_rows.append(encode_row(i, j, k, l))
-                                                        r4_cols.append(encode_col(a, b, c, d))
+            # Now contract with another T2: temp_ijab * t2_klcd
+            r4 -= contract('ijab,klcd->ijklabcd', temp_2body, t2)
         
-        # Build sparse R4
-        if len(r4_data) > 0:
-            r4_sparse = sparse.csr_matrix((r4_data, (r4_rows, r4_cols)), shape=t4_shape)
-            
-            # Combine duplicate entries (sum them)
-            r4_sparse.sum_duplicates()
-            
-            # Apply denominators and thresholding
-            r4_coo = r4_sparse.tocoo()
-            new_t4_data = []
-            new_t4_rows = []
-            new_t4_cols = []
-            
-            for idx in range(r4_coo.nnz):
-                i, j, k, l = decode_row(r4_coo.row[idx])
-                a, b, c, d = decode_col(r4_coo.col[idx])
-                
-                denom = compute_D4(i, j, k, l, a, b, c, d)
-                if abs(denom) > 1e-12:
-                    val = r4_coo.data[idx] / denom
-                    
-                    # Apply threshold
-                    if abs(val) > t4_threshold:
-                        new_t4_data.append(val)
-                        new_t4_rows.append(r4_coo.row[idx])
-                        new_t4_cols.append(r4_coo.col[idx])
-            
-            new_t4 = sparse.csr_matrix((new_t4_data, (new_t4_rows, new_t4_cols)), shape=t4_shape)
-        else:
-            new_t4 = sparse.csr_matrix(t4_shape)
+        # Solve amplitudes
+        new_t2 = r2 / D2
+        new_t4 = r4 / D4
         
-        # Update T2 and T4 with damping
-        t2 = (1 - alpha) * t2 + alpha * (r2 / D2)
+        # Apply damping for stability
+        t2 = (1 - alpha) * t2 + alpha * new_t2
         t4 = (1 - alpha) * t4 + alpha * new_t4
-        
-        # Re-threshold T4 to keep it sparse
-        if t4.nnz > 0:
-            t4_coo = t4.tocoo()
-            keep_mask = np.abs(t4_coo.data) > t4_threshold
-            t4 = sparse.csr_matrix(
-                (t4_coo.data[keep_mask], 
-                 (t4_coo.row[keep_mask], t4_coo.col[keep_mask])),
-                shape=t4_shape
-            )
         
         old_e = e_corr
         
         if np.isnan(e_corr) or abs(e_corr) > 1e10:
             print("[CCDQ ERROR] Diverged.")
             break
-    
+            
     print("[CCDQ] Maximum iterations reached.")
-    
-    # Report final memory usage
-    actual_size_mb = (t4.nnz * 8 * 3) / 1e6  # data + row + col indices
-    print(f"\n[CCDQ Sparse] Final T4 memory: {actual_size_mb:.2f} MB ({t4.nnz} non-zeros)")
-    print(f"[CCDQ Sparse] Memory savings: {100*(1 - actual_size_mb/(dense_size_gb*1000)):.1f}%")
-    
     return e_corr, t2, t4
 
 

@@ -8,6 +8,7 @@ from similarity_transform import similarity_transform_t1, similarity_transform_t
 
 def main():
     snt_file = "gxpf1a.snt"
+    #snt_file = "usdb.snt"
     
     print("--- 1. Reading SNT Interaction ---")
     orbits, potential = read_snt(snt_file)
@@ -28,13 +29,16 @@ def main():
     print(f"m-scheme v2b shape: {v2b_m.shape}")
     
     # Z=2, N=2 for Ne-20 relative to O16 core
-    Z_val = 8
-    N_val = 8
+   # Z_val = 2
+   # N_val = 2
+   # occ_indices = [0,1,12,13]
     
     # Custom initial occupation (set to None for automatic energy-based)
     # Example: occ_indices = [0, 1, 6, 7] for Z=2, N=2
     #occ_indices = [4,5,6,7,8,9,16,17,18,19,20,21]
     #occ_indices = [4,5,16,17]
+    Z_val = 8
+    N_val = 8
     occ_indices=[]
     for i in range(8):
         occ_indices.append(i)
@@ -78,11 +82,11 @@ def main():
     print(f"CCD correlation energy: {e_ccd:.6f} MeV")
     print(f"Total CCD energy: {no_ham.E0 + e_ccd:.6f} MeV")
     
-    # CCDQ
-    print("\n--- CCDQ (Doubles + Quadruples) ---")
-    e_ccdq, t2_ccdq, t4_ccdq = ccdq(no_ham, n_occ, max_iter=100, tol=1e-6, alpha=0.3)
-    print(f"CCDQ correlation energy: {e_ccdq:.6f} MeV")
-    print(f"Total CCDQ energy: {no_ham.E0 + e_ccdq:.6f} MeV")
+    ## CCDQ
+    #print("\n--- CCDQ (Doubles + Quadruples) ---")
+    #e_ccdq, t2_ccdq, t4_ccdq = ccdq(no_ham, n_occ, max_iter=100, tol=1e-6, alpha=0.3, initial_t2=t2_ccd)
+    #print(f"CCDQ correlation energy: {e_ccdq:.6f} MeV")
+    #print(f"Total CCDQ energy: {no_ham.E0 + e_ccdq:.6f} MeV")
 
 
     #print("\n--- 6a. Performing CCD (Diagnostic) ---")
@@ -90,10 +94,10 @@ def main():
     #print(f"CCSD Correlation Energy: {e_corr_ccsd:.6f} MeV")
     #print(f"Total CCSD Energy: {no_ham.E0 + e_corr_ccsd:.6f} MeV")
 
-    #print("\n--- 6b. Performing CCSDT ---")
-    #e_corr, t1, t2, t3 = ccsdt(no_ham, n_occ)
-    #print(f"\nCCSDT Correlation Energy: {e_corr:.6f} MeV")
-    #print(f"Total CCSDT Energy: {no_ham.E0 + e_corr:.6f} MeV")
+    print("\n--- 6b. Performing CCSDT ---")
+    e_corr, t1, t2, t3 = ccsdt(no_ham, n_occ)
+    print(f"\nCCSDT Correlation Energy: {e_corr:.6f} MeV")
+    print(f"Total CCSDT Energy: {no_ham.E0 + e_corr:.6f} MeV")
 
     #l1_t, l2_t = lambda_ccsd(no_ham, t1_ccsd, t2_ccsd,  n_occ, max_iter=30)
     
