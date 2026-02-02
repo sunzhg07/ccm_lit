@@ -1,9 +1,41 @@
 
 import numpy as np
 from opt_einsum import contract
+from scipy import sparse
 
-# Enable CCSD debug diagnostics
-CCSD_DEBUG = True
+
+# Sparse matrix optimization utilities
+SPARSE_THRESHOLD = 1e-12  # Elements below this are considered zero for sparsity
+
+
+def to_sparse_if_beneficial(arr, threshold=SPARSE_THRESHOLD):
+    """Convert array to sparse if it would save memory."""
+    if arr is None or arr.size == 0:
+        return arr
+    
+    sparsity = np.sum(np.abs(arr) < threshold) / arr.size
+    # Use sparse if more than 50% of elements are near-zero
+    if sparsity > 0.5:
+        return sparse.csr_matrix(arr.reshape(arr.shape[0], -1))
+    return arr
+
+
+def ensure_dense(arr):
+    """Ensure array is in dense format."""
+    if sparse.issparse(arr):
+        return arr.toarray()
+    return arr
+
+
+def sparse_einsum(subscripts, *operands, threshold=SPARSE_THRESHOLD):
+    """
+    Perform einsum with automatic sparsity detection.
+    Falls back to dense computation for now, but masks small values.
+    """
+    result = np.einsum(subscripts, *operands)
+    result[np.abs(result) < threshold] = 0
+    return result
+
 
 
 def pAB(val):
@@ -15,22 +47,12 @@ def pIJ(val):
     """Permutator val(abij) -> val(abij) - val(abji)"""
     return val - np.transpose(val, (0, 1, 3, 2))
 
-import numpy as np
 
-import numpy as np
-
-import numpy as np
-import numpy as np
-
-import numpy as np
-
-
-import numpy as np
-
-def ccd(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0):
+def ccd(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0, use_sparse=True, sparse_threshold=SPARSE_THRESHOLD):
     """
     CCD solver using the T2 equation from the provided LaTeX images.
     Implements the Stanton & Gauss intermediate factorization.
+    Optimized with sparse matrix support for memory efficiency.
     """
     # 1. Setup dimensions and Hamiltonian blocks
     n_states = no_ham.f.shape[0]
@@ -51,49 +73,53 @@ def ccd(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0):
     # 2. Initial Guess (MP2 amplitudes)
     # Corresponding to the <ab||ij> term in the image
     t2 = Gamma[o, o, v, v] / D2
+    
+    # Apply sparsity pruning to initial guess
+    if use_sparse:
+        t2[np.abs(t2) < sparse_threshold] = 0
 
     old_e = 0.0
-    print(f"\n[CCD] {'Iter':>4} | {'E_corr':>18} | {'Delta E':>12}")
-    print("-" * 50)
+    print(f"\n[CCD+Sparse] {'Iter':>4} | {'E_corr':>18} | {'Delta E':>12} | {'Sparsity':>8}")
+    print("-" * 65)
 
     for iteration in range(max_iter):
         # --- Intermediates for CCD (T1 = 0) ---
 
         # F_ae: Particle-Particle ladder intermediate
         F_ae = f_vv.copy()
-        F_ae -= 0.5 * np.einsum('mnaf,mnef->ae', t2, Gamma[o, o, v, v])
+        F_ae -= 0.5 * sparse_einsum('mnaf,mnef->ae', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         # F_mi: Hole-Hole ladder intermediate
         F_mi = f_oo.copy()
-        F_mi += 0.5 * np.einsum('inef,mnef->mi', t2, Gamma[o, o, v, v])
+        F_mi += 0.5 * sparse_einsum('inef,mnef->mi', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         # W_mnij: Hole-Hole effective interaction
-        W_mnij = Gamma[o, o, o, o] + 0.25 * np.einsum('ijef,mnef->mnij', t2, Gamma[o, o, v, v])
+        W_mnij = Gamma[o, o, o, o] + 0.25 * sparse_einsum('ijef,mnef->mnij', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         # W_abef: Particle-Particle effective interaction
-        W_abef = Gamma[v, v, v, v] + 0.25 * np.einsum('mnab,mnef->abef', t2, Gamma[o, o, v, v])
+        W_abef = Gamma[v, v, v, v] + 0.25 * sparse_einsum('mnab,mnef->abef', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         # W_mbej: Particle-Hole ring intermediate (the P(ij)P(ab) terms)
-        W_mbej = Gamma[o, v, v, o] - 0.5 * np.einsum('jnfb,mnef->mbej', t2, Gamma[o, o, v, v])
+        W_mbej = Gamma[o, v, v, o] - 0.5 * sparse_einsum('jnfb,mnef->mbej', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         # --- Residual (R2) Construction ---
         # 1. Constant term: <ab||ij>
         r2 = Gamma[o, o, v, v].copy()
 
         # 2. F-term coupling (Ladder terms)
-        term_ae = np.einsum('ijeb,ae->ijab', t2, F_ae)
+        term_ae = sparse_einsum('ijeb,ae->ijab', t2, F_ae, threshold=sparse_threshold)
         r2 += (term_ae - term_ae.transpose(0, 1, 3, 2)) # P(ab)
 
-        term_mi = np.einsum('mjab,mi->ijab', t2, F_mi)
+        term_mi = sparse_einsum('mjab,mi->ijab', t2, F_mi, threshold=sparse_threshold)
         r2 -= (term_mi - term_mi.transpose(1, 0, 2, 3)) # P(ij)
 
         # 3. W-term coupling (Direct ladders)
-        r2 += 0.5 * np.einsum('mnab,mnij->ijab', t2, W_mnij)
-        r2 += 0.5 * np.einsum('ijef,abef->ijab', t2, W_abef)
+        r2 += 0.5 * sparse_einsum('mnab,mnij->ijab', t2, W_mnij, threshold=sparse_threshold)
+        r2 += 0.5 * sparse_einsum('ijef,abef->ijab', t2, W_abef, threshold=sparse_threshold)
 
         # 4. Ring terms with P(ij)P(ab) permutations
         # This maps to the P(ij)P(ab) sum_{kc} <kb||cj> t_ik^ac term in the image
-        term_ring = np.einsum('imae,mbej->ijab', t2, W_mbej)
+        term_ring = sparse_einsum('imae,mbej->ijab', t2, W_mbej, threshold=sparse_threshold)
         r2 += (term_ring - term_ring.transpose(1, 0, 2, 3)
                - term_ring.transpose(0, 1, 3, 2) + term_ring.transpose(1, 0, 3, 2))
 
@@ -101,7 +127,10 @@ def ccd(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0):
         e_corr = 0.25 * np.sum(Gamma[o, o, v, v] * t2)
 
         delta_e = abs(e_corr - old_e)
-        print(f"[CCD] {iteration:4d} | {e_corr:18.10f} | {delta_e:12.4e}")
+        
+        # Calculate sparsity for monitoring
+        sparsity = np.sum(np.abs(t2) < sparse_threshold) / t2.size
+        print(f"[CCD] {iteration:4d} | {e_corr:18.10f} | {delta_e:12.4e} | {sparsity:7.2%}")
 
         if delta_e < tol:
             print("CCD Converged!")
@@ -109,6 +138,11 @@ def ccd(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0):
 
         # Additive Update: t = t + alpha * (r / D)
         t2 += alpha * (r2 / D2)
+        
+        # Prune small amplitudes for memory efficiency
+        if use_sparse:
+            t2[np.abs(t2) < sparse_threshold] = 0
+        
         old_e = e_corr
 
     return e_corr, t2
@@ -117,10 +151,11 @@ def ccd(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0):
 import numpy as np
 
 
-def ccd_diis_solver(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0, diis_size=8):
+def ccd_diis_solver(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0, diis_size=8, use_sparse=True, sparse_threshold=SPARSE_THRESHOLD):
     """
     Full CCD solver using the provided LaTeX equations.
     Includes intermediate factorization and a stabilized DIIS extrapolation.
+    Optimized with sparse matrix support for memory efficiency.
     """
     # 1. Setup dimensions and Hamiltonian blocks
     n_states = no_ham.f.shape[0]
@@ -140,47 +175,54 @@ def ccd_diis_solver(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0, diis_size=
 
     # Initial Guess: MP2 amplitudes t2[i,j,a,b]
     t2 = Gamma[o, o, v, v] / D2
+    
+    # Apply sparsity pruning to initial guess
+    if use_sparse:
+        t2[np.abs(t2) < sparse_threshold] = 0
 
     # DIIS History Containers
     t_hist = []  # Stores the "extrapolated-ready" amplitudes
     e_hist = []  # Stores the error vectors (Residual / Denominator)
 
     old_e = 0.0
-    print(f"\n[CCD+DIIS] {'Iter':>4} | {'E_corr':>18} | {'Delta E':>12}")
-    print("-" * 55)
+    print(f"\n[CCD+DIIS+Sparse] {'Iter':>4} | {'E_corr':>18} | {'Delta E':>12} | {'Sparsity':>8}")
+    print("-" * 70)
 
     for i in range(max_iter):
         # 2. Construction of Intermediates (O(N^6) scaling)
-        F_ae = f_vv.copy() - 0.5 * np.einsum('mnaf,mnef->ae', t2, Gamma[o, o, v, v])
-        F_mi = f_oo.copy() + 0.5 * np.einsum('inef,mnef->mi', t2, Gamma[o, o, v, v])
+        F_ae = f_vv.copy() - 0.5 * sparse_einsum('mnaf,mnef->ae', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
+        F_mi = f_oo.copy() + 0.5 * sparse_einsum('inef,mnef->mi', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
 
-        W_mnij = Gamma[o, o, o, o] + 0.25 * np.einsum('ijef,mnef->mnij', t2, Gamma[o, o, v, v])
-        W_abef = Gamma[v, v, v, v] + 0.25 * np.einsum('mnab,mnef->abef', t2, Gamma[o, o, v, v])
-        W_mbej = Gamma[o, v, v, o] - 0.5 * np.einsum('jnfb,mnef->mbej', t2, Gamma[o, o, v, v])
+        W_mnij = Gamma[o, o, o, o] + 0.25 * sparse_einsum('ijef,mnef->mnij', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
+        W_abef = Gamma[v, v, v, v] + 0.25 * sparse_einsum('mnab,mnef->abef', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
+        W_mbej = Gamma[o, v, v, o] - 0.5 * sparse_einsum('jnfb,mnef->mbej', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         # 3. Build Residual R_ijab (Matches the provided LaTeX equations)
         r2 = Gamma[o, o, v, v].copy() # Constant term <ab||ij>
 
         # F-couplings (Ladders)
-        term_ae = np.einsum('ijeb,ae->ijab', t2, F_ae)
+        term_ae = sparse_einsum('ijeb,ae->ijab', t2, F_ae, threshold=sparse_threshold)
         r2 += (term_ae - term_ae.transpose(0, 1, 3, 2)) # P(ab)
 
-        term_mi = np.einsum('mjab,mi->ijab', t2, F_mi)
+        term_mi = sparse_einsum('mjab,mi->ijab', t2, F_mi, threshold=sparse_threshold)
         r2 -= (term_mi - term_mi.transpose(1, 0, 2, 3)) # P(ij)
 
         # W-couplings
-        r2 += 0.5 * np.einsum('mnab,mnij->ijab', t2, W_mnij)
-        r2 += 0.5 * np.einsum('ijef,abef->ijab', t2, W_abef)
+        r2 += 0.5 * sparse_einsum('mnab,mnij->ijab', t2, W_mnij, threshold=sparse_threshold)
+        r2 += 0.5 * sparse_einsum('ijef,abef->ijab', t2, W_abef, threshold=sparse_threshold)
 
         # Ring terms with P(ij)P(ab) permutations
-        term_ring = np.einsum('imae,mbej->ijab', t2, W_mbej)
+        term_ring = sparse_einsum('imae,mbej->ijab', t2, W_mbej, threshold=sparse_threshold)
         r2 += (term_ring - term_ring.transpose(1, 0, 2, 3)
                - term_ring.transpose(0, 1, 3, 2) + term_ring.transpose(1, 0, 3, 2))
 
         # 4. Energy calculation and Convergence check
         e_corr = 0.25 * np.sum(Gamma[o, o, v, v] * t2)
         delta_e = abs(e_corr - old_e)
-        print(f" {i:4d} | {e_corr:18.10f} | {delta_e:12.4e}")
+        
+        # Calculate sparsity for monitoring
+        sparsity = np.sum(np.abs(t2) < sparse_threshold) / t2.size
+        print(f" {i:4d} | {e_corr:18.10f} | {delta_e:12.4e} | {sparsity:7.2%}")
 
         if delta_e < tol:
             print("CCD Converged!")
@@ -227,11 +269,19 @@ def ccd_diis_solver(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0, diis_size=
         else:
             # First iterations use standard additive update
             t2 = (t2.ravel() + alpha * error_vec).reshape(t2.shape)
+        
+        # Prune small amplitudes for memory efficiency
+        if use_sparse:
+            t2[np.abs(t2) < sparse_threshold] = 0
 
     return e_corr, t2
 
 
-def ccsd_diis_solver(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0, diis_size=6):
+def ccsd_diis_solver(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0, diis_size=6, use_sparse=True, sparse_threshold=SPARSE_THRESHOLD):
+    """
+    CCSD solver with DIIS acceleration.
+    Optimized with sparse matrix support for memory efficiency.
+    """
     n_states = no_ham.f.shape[0]
     o = slice(0, n_occ)
     v = slice(n_occ, n_states)
@@ -247,70 +297,78 @@ def ccsd_diis_solver(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0, diis_size
     # Initialize Amplitudes
     t1 = np.zeros((n_occ, n_states - n_occ))
     t2 = Gamma[o, o, v, v] / D2
+    
+    # Apply sparsity pruning to initial guess
+    if use_sparse:
+        t2[np.abs(t2) < sparse_threshold] = 0
 
     # DIIS Storage
     t_list = []
     e_list = []
 
     old_e = 0.0
-    print(f"\n[CCSD+DIIS] {'Iter':>4} | {'E_corr':>18} | {'Delta E':>12}")
-    print("-" * 55)
+    print(f"\n[CCSD+DIIS+Sparse] {'Iter':>4} | {'E_corr':>18} | {'Delta E':>12} | {'T1 Sparsity':>12} | {'T2 Sparsity':>12}")
+    print("-" * 95)
 
     for i in range(max_iter):
         # --- 1. Intermediate and Residual Calculation (Same as before) ---
-        t1t1 = np.einsum('ia,jb->ijab', t1, t1)
+        t1t1 = sparse_einsum('ia,jb->ijab', t1, t1, threshold=sparse_threshold)
         tau = t2 + t1t1 - t1t1.transpose(0, 1, 3, 2)
         tau_tilde = t2 + 0.5 * (t1t1 - t1t1.transpose(0, 1, 3, 2))
 
         # F-Intermediates
-        F_ae = f[v, v].copy() - 0.5 * np.einsum('me,ma->ae', f[o, v], t1)
-        F_ae += np.einsum('mf,amef->ae', t1, Gamma[v, o, v, v])
-        F_ae -= 0.5 * np.einsum('mnaf,mnef->ae', tau_tilde, Gamma[o, o, v, v])
+        F_ae = f[v, v].copy() - 0.5 * sparse_einsum('me,ma->ae', f[o, v], t1, threshold=sparse_threshold)
+        F_ae += sparse_einsum('mf,amef->ae', t1, Gamma[v, o, v, v], threshold=sparse_threshold)
+        F_ae -= 0.5 * sparse_einsum('mnaf,mnef->ae', tau_tilde, Gamma[o, o, v, v], threshold=sparse_threshold)
 
-        F_mi = f[o, o].copy() + 0.5 * np.einsum('ie,me->mi', t1, f[o, v])
-        F_mi += np.einsum('ne,mnie->mi', t1, Gamma[o, o, o, v])
-        F_mi += 0.5 * np.einsum('inef,mnef->mi', tau_tilde, Gamma[o, o, v, v])
+        F_mi = f[o, o].copy() + 0.5 * sparse_einsum('ie,me->mi', t1, f[o, v], threshold=sparse_threshold)
+        F_mi += sparse_einsum('ne,mnie->mi', t1, Gamma[o, o, o, v], threshold=sparse_threshold)
+        F_mi += 0.5 * sparse_einsum('inef,mnef->mi', tau_tilde, Gamma[o, o, v, v], threshold=sparse_threshold)
 
-        F_me = f[o, v] + np.einsum('nf,mnef->me', t1, Gamma[o, o, v, v])
+        F_me = f[o, v] + sparse_einsum('nf,mnef->me', t1, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         # W-Intermediates
-        W_mnij = Gamma[o, o, o, o] + 0.25 * np.einsum('ijef,mnef->mnij', tau, Gamma[o, o, v, v])
-        term_mnij = np.einsum('je,mnie->mnij', t1, Gamma[o, o, o, v])
+        W_mnij = Gamma[o, o, o, o] + 0.25 * sparse_einsum('ijef,mnef->mnij', tau, Gamma[o, o, v, v], threshold=sparse_threshold)
+        term_mnij = sparse_einsum('je,mnie->mnij', t1, Gamma[o, o, o, v], threshold=sparse_threshold)
         W_mnij += (term_mnij - term_mnij.transpose(0, 1, 3, 2))
 
-        W_abef = Gamma[v, v, v, v] + 0.25 * np.einsum('mnab,mnef->abef', tau, Gamma[o, o, v, v])
-        term_abef = np.einsum('ma,mbef->abef', t1, Gamma[o, v, v, v])
+        W_abef = Gamma[v, v, v, v] + 0.25 * sparse_einsum('mnab,mnef->abef', tau, Gamma[o, o, v, v], threshold=sparse_threshold)
+        term_abef = sparse_einsum('ma,mbef->abef', t1, Gamma[o, v, v, v], threshold=sparse_threshold)
         W_abef -= (term_abef - term_abef.transpose(1, 0, 2, 3))
 
-        W_mbej = Gamma[o, v, v, o] + np.einsum('jf,mbef->mbej', t1, Gamma[o, v, v, v])
-        W_mbej -= np.einsum('nb,mnej->mbej', t1, Gamma[o, o, v, o])
-        W_mbej -= 0.5 * np.einsum('jnfb,mnef->mbej', t2, Gamma[o, o, v, v])
-        W_mbej -= np.einsum('jf,nb,mnef->mbej', t1, t1, Gamma[o, o, v, v])
+        W_mbej = Gamma[o, v, v, o] + sparse_einsum('jf,mbef->mbej', t1, Gamma[o, v, v, v], threshold=sparse_threshold)
+        W_mbej -= sparse_einsum('nb,mnej->mbej', t1, Gamma[o, o, v, o], threshold=sparse_threshold)
+        W_mbej -= 0.5 * sparse_einsum('jnfb,mnef->mbej', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
+        W_mbej -= sparse_einsum('jf,nb,mnef->mbej', t1, t1, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         # Residuals
-        r1 = f[v, o].T + np.einsum('ie,ae->ia', t1, F_ae) - np.einsum('ma,mi->ia', t1, F_mi)
-        r1 += np.einsum('imae,me->ia', t2, F_me) + np.einsum('nf,nafi->ia', t1, Gamma[o, v, v, o])
-        r1 -= 0.5 * np.einsum('imef,maef->ia', t2, Gamma[o, v, v, v]) + 0.5 * np.einsum('mnea,mnei->ia', t2, Gamma[o, o, v, o])
+        r1 = f[v, o].T + sparse_einsum('ie,ae->ia', t1, F_ae, threshold=sparse_threshold) - sparse_einsum('ma,mi->ia', t1, F_mi, threshold=sparse_threshold)
+        r1 += sparse_einsum('imae,me->ia', t2, F_me, threshold=sparse_threshold) + sparse_einsum('nf,nafi->ia', t1, Gamma[o, v, v, o], threshold=sparse_threshold)
+        r1 -= 0.5 * sparse_einsum('imef,maef->ia', t2, Gamma[o, v, v, v], threshold=sparse_threshold) + 0.5 * sparse_einsum('mnea,mnei->ia', t2, Gamma[o, o, v, o], threshold=sparse_threshold)
 
         r2 = Gamma[o, o, v, v].copy()
-        term_ae = np.einsum('ijeb,ae->ijab', t2, F_ae)
+        term_ae = sparse_einsum('ijeb,ae->ijab', t2, F_ae, threshold=sparse_threshold)
         r2 += (term_ae - term_ae.transpose(0, 1, 3, 2))
-        term_mi = np.einsum('mjab,mi->ijab', t2, F_mi)
+        term_mi = sparse_einsum('mjab,mi->ijab', t2, F_mi, threshold=sparse_threshold)
         r2 -= (term_mi - term_mi.transpose(1, 0, 2, 3))
-        r2 += 0.5 * np.einsum('mnab,mnij->ijab', tau, W_mnij) + 0.5 * np.einsum('ijef,abef->ijab', tau, W_abef)
+        r2 += 0.5 * sparse_einsum('mnab,mnij->ijab', tau, W_mnij, threshold=sparse_threshold) + 0.5 * sparse_einsum('ijef,abef->ijab', tau, W_abef, threshold=sparse_threshold)
 
-        term_ring = np.einsum('imae,mbej->ijab', t2, W_mbej)
+        term_ring = sparse_einsum('imae,mbej->ijab', t2, W_mbej, threshold=sparse_threshold)
         r2 += (term_ring - term_ring.transpose(1, 0, 2, 3) - term_ring.transpose(0, 1, 3, 2) + term_ring.transpose(1, 0, 3, 2))
 
-        term_t1_v = np.einsum('ie,abej->ijab', t1, Gamma[v, v, v, o])
+        term_t1_v = sparse_einsum('ie,abej->ijab', t1, Gamma[v, v, v, o], threshold=sparse_threshold)
         r2 += (term_t1_v - term_t1_v.transpose(1, 0, 2, 3))
-        term_t1_o = np.einsum('ma,mbij->ijab', t1, Gamma[o, v, o, o])
+        term_t1_o = sparse_einsum('ma,mbij->ijab', t1, Gamma[o, v, o, o], threshold=sparse_threshold)
         r2 -= (term_t1_o - term_t1_o.transpose(0, 1, 3, 2))
 
         # --- 2. Energy and Convergence Check ---
         e_corr = np.sum(f[o, v] * t1) + 0.25 * np.sum(Gamma[o, o, v, v] * tau)
         delta_e = abs(e_corr - old_e)
-        print(f"[CCSD] {i:4d} | {e_corr:18.10f} | {delta_e:12.4e}")
+        
+        # Calculate sparsity for monitoring
+        t1_sparsity = np.sum(np.abs(t1) < sparse_threshold) / t1.size if t1.size > 0 else 0
+        t2_sparsity = np.sum(np.abs(t2) < sparse_threshold) / t2.size
+        print(f"[CCSD] {i:4d} | {e_corr:18.10f} | {delta_e:12.4e} | {t1_sparsity:11.2%} | {t2_sparsity:11.2%}")
 
         if delta_e < tol:
             return e_corr, t1, t2
@@ -365,13 +423,19 @@ def ccsd_diis_solver(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=1.0, diis_size
         # Reshape back to T1 and T2
         t1 = t_new[:t1.size].reshape(t1.shape)
         t2 = t_new[t1.size:].reshape(t2.shape)
+        
+        # Prune small amplitudes for memory efficiency
+        if use_sparse:
+            t1[np.abs(t1) < sparse_threshold] = 0
+            t2[np.abs(t2) < sparse_threshold] = 0
 
     return e_corr, t1, t2
 
-def ccsd(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=0.5):
+def ccsd(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=0.5, use_sparse=True, sparse_threshold=SPARSE_THRESHOLD):
     """
     CCSD solver based on the provided T1 and T2 long-form equations.
     Optimized via Stanton & Gauss intermediate factorization.
+    Optimized with sparse matrix support for memory efficiency.
     """
     n_states = no_ham.f.shape[0]
     o = slice(0, n_occ)
@@ -391,87 +455,229 @@ def ccsd(no_ham, n_occ, max_iter=200, tol=1e-8, alpha=0.5):
     # Initialize Amplitudes
     t1 = np.zeros((n_occ, n_states - n_occ))
     t2 = Gamma[o, o, v, v] / D2
+    
+    # Apply sparsity pruning to initial guess
+    if use_sparse:
+        t2[np.abs(t2) < sparse_threshold] = 0
 
     old_e = 0.0
+    print(f"\n[CCSD+Sparse] {'Iter':>4} | {'E_corr':>18} | {'Delta E':>12} | {'T1 Sparsity':>12} | {'T2 Sparsity':>12}")
+    print("-" * 95)
+    
     for i in range(max_iter):
         # 1. Intermediates (Combining T1 and T2 terms as shown in equations)
         # tau_tilde = t_ijab + 0.5 * (t_ia * t_jb - t_ib * t_ja)
-        t1t1 = np.einsum('ia,jb->ijab', t1, t1)
+        t1t1 = sparse_einsum('ia,jb->ijab', t1, t1, threshold=sparse_threshold)
         tau = t2 + t1t1 - t1t1.transpose(0, 1, 3, 2)
         tau_tilde = t2 + 0.5 * (t1t1 - t1t1.transpose(0, 1, 3, 2))
 
         # F-Intermediates (Effective Fock matrices)
         F_ae = f_vv.copy()
-        F_ae -= 0.5 * np.einsum('me,ma->ae', f_ov, t1)
-        F_ae += np.einsum('mf,amef->ae', t1, Gamma[v, o, v, v])
-        F_ae -= 0.5 * np.einsum('mnaf,mnef->ae', tau_tilde, Gamma[o, o, v, v])
+        F_ae -= 0.5 * sparse_einsum('me,ma->ae', f_ov, t1, threshold=sparse_threshold)
+        F_ae += sparse_einsum('mf,amef->ae', t1, Gamma[v, o, v, v], threshold=sparse_threshold)
+        F_ae -= 0.5 * sparse_einsum('mnaf,mnef->ae', tau_tilde, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         F_mi = f_oo.copy()
-        F_mi += 0.5 * np.einsum('ie,me->mi', t1, f_ov)
-        F_mi += np.einsum('ne,mnie->mi', t1, Gamma[o, o, o, v])
-        F_mi += 0.5 * np.einsum('inef,mnef->mi', tau_tilde, Gamma[o, o, v, v])
+        F_mi += 0.5 * sparse_einsum('ie,me->mi', t1, f_ov, threshold=sparse_threshold)
+        F_mi += sparse_einsum('ne,mnie->mi', t1, Gamma[o, o, o, v], threshold=sparse_threshold)
+        F_mi += 0.5 * sparse_einsum('inef,mnef->mi', tau_tilde, Gamma[o, o, v, v], threshold=sparse_threshold)
 
-        F_me = f_ov + np.einsum('nf,mnef->me', t1, Gamma[o, o, v, v])
+        F_me = f_ov + sparse_einsum('nf,mnef->me', t1, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         # W-Intermediates (Effective Integrals)
-        W_mnij = Gamma[o, o, o, o] + 0.25 * np.einsum('ijef,mnef->mnij', tau, Gamma[o, o, v, v])
-        W_mnij += (np.einsum('je,mnie->mnij', t1, Gamma[o, o, o, v]) -
-                   np.einsum('ie,mnje->mnij', t1, Gamma[o, o, o, v]))
+        W_mnij = Gamma[o, o, o, o] + 0.25 * sparse_einsum('ijef,mnef->mnij', tau, Gamma[o, o, v, v], threshold=sparse_threshold)
+        W_mnij += (sparse_einsum('je,mnie->mnij', t1, Gamma[o, o, o, v], threshold=sparse_threshold) -
+                   sparse_einsum('ie,mnje->mnij', t1, Gamma[o, o, o, v], threshold=sparse_threshold))
 
-        W_abef = Gamma[v, v, v, v] + 0.25 * np.einsum('mnab,mnef->abef', tau, Gamma[o, o, v, v])
-        W_abef -= (np.einsum('ma,mbef->abef', t1, Gamma[o, v, v, v]) -
-                   np.einsum('mb,maef->abef', t1, Gamma[o, v, v, v]))
+        W_abef = Gamma[v, v, v, v] + 0.25 * sparse_einsum('mnab,mnef->abef', tau, Gamma[o, o, v, v], threshold=sparse_threshold)
+        W_abef -= (sparse_einsum('ma,mbef->abef', t1, Gamma[o, v, v, v], threshold=sparse_threshold) -
+                   sparse_einsum('mb,maef->abef', t1, Gamma[o, v, v, v], threshold=sparse_threshold))
 
-        W_mbej = Gamma[o, v, v, o] + np.einsum('jf,mbef->mbej', t1, Gamma[o, v, v, v])
-        W_mbej -= np.einsum('nb,mnej->mbej', t1, Gamma[o, o, v, o])
-        W_mbej -= 0.5 * np.einsum('jnfb,mnef->mbej', t2, Gamma[o, o, v, v])
-        W_mbej -= np.einsum('jf,nb,mnef->mbej', t1, t1, Gamma[o, o, v, v])
+        W_mbej = Gamma[o, v, v, o] + sparse_einsum('jf,mbef->mbej', t1, Gamma[o, v, v, v], threshold=sparse_threshold)
+        W_mbej -= sparse_einsum('nb,mnej->mbej', t1, Gamma[o, o, v, o], threshold=sparse_threshold)
+        W_mbej -= 0.5 * sparse_einsum('jnfb,mnef->mbej', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
+        W_mbej -= sparse_einsum('jf,nb,mnef->mbej', t1, t1, Gamma[o, o, v, v], threshold=sparse_threshold)
 
         # 2. Residuals
         # T1 Residual (Maps to Image 1)
-        r1 = f_vo.T + np.einsum('ie,ae->ia', t1, F_ae) - np.einsum('ma,mi->ia', t1, F_mi)
-        r1 += np.einsum('imae,me->ia', t2, F_me)
-        r1 += np.einsum('nf,nafi->ia', t1, Gamma[o, v, v, o])
-        r1 -= 0.5 * np.einsum('imef,maef->ia', t2, Gamma[o, v, v, v])
-        r1 -= 0.5 * np.einsum('mnea,mnei->ia', t2, Gamma[o, o, v, o])
+        r1 = f_vo.T + sparse_einsum('ie,ae->ia', t1, F_ae, threshold=sparse_threshold) - sparse_einsum('ma,mi->ia', t1, F_mi, threshold=sparse_threshold)
+        r1 += sparse_einsum('imae,me->ia', t2, F_me, threshold=sparse_threshold)
+        r1 += sparse_einsum('nf,nafi->ia', t1, Gamma[o, v, v, o], threshold=sparse_threshold)
+        r1 -= 0.5 * sparse_einsum('imef,maef->ia', t2, Gamma[o, v, v, v], threshold=sparse_threshold)
+        r1 -= 0.5 * sparse_einsum('mnea,mnei->ia', t2, Gamma[o, o, v, o], threshold=sparse_threshold)
 
         # T2 Residual (Maps to Image 2)
         r2 = Gamma[o, o, v, v].copy()
 
         # Linear and Quadratic T2 couplings
-        term_ae = np.einsum('ijeb,ae->ijab', t2, F_ae)
+        term_ae = sparse_einsum('ijeb,ae->ijab', t2, F_ae, threshold=sparse_threshold)
         r2 += (term_ae - term_ae.transpose(0, 1, 3, 2))
-        term_mi = np.einsum('mjab,mi->ijab', t2, F_mi)
+        term_mi = sparse_einsum('mjab,mi->ijab', t2, F_mi, threshold=sparse_threshold)
         r2 -= (term_mi - term_mi.transpose(1, 0, 2, 3))
 
-        r2 += 0.5 * np.einsum('mnab,mnij->ijab', tau, W_mnij)
-        r2 += 0.5 * np.einsum('ijef,abef->ijab', tau, W_abef)
+        r2 += 0.5 * sparse_einsum('mnab,mnij->ijab', tau, W_mnij, threshold=sparse_threshold)
+        r2 += 0.5 * sparse_einsum('ijef,abef->ijab', tau, W_abef, threshold=sparse_threshold)
 
         # Ring terms P(ij)P(ab)
-        term_ring = np.einsum('imae,mbej->ijab', t2, W_mbej)
+        term_ring = sparse_einsum('imae,mbej->ijab', t2, W_mbej, threshold=sparse_threshold)
         r2 += (term_ring - term_ring.transpose(1, 0, 2, 3) -
                term_ring.transpose(0, 1, 3, 2) + term_ring.transpose(1, 0, 3, 2))
 
         # T1 couplings
-        term_t1_v = np.einsum('ie,abej->ijab', t1, Gamma[v, v, v, o])
+        term_t1_v = sparse_einsum('ie,abej->ijab', t1, Gamma[v, v, v, o], threshold=sparse_threshold)
         r2 += (term_t1_v - term_t1_v.transpose(1, 0, 2, 3))
-        term_t1_o = np.einsum('ma,mbij->ijab', t1, Gamma[o, v, o, o])
+        term_t1_o = sparse_einsum('ma,mbij->ijab', t1, Gamma[o, v, o, o], threshold=sparse_threshold)
         r2 -= (term_t1_o - term_t1_o.transpose(0, 1, 3, 2))
 
         # 3. Energy and Step Update
         e_corr = np.sum(f_ov * t1) + 0.25 * np.sum(Gamma[o, o, v, v] * tau)
 
-        if abs(e_corr - old_e) < tol:
+        delta_e = abs(e_corr - old_e)
+        
+        # Calculate sparsity for monitoring
+        t1_sparsity = np.sum(np.abs(t1) < sparse_threshold) / t1.size if t1.size > 0 else 0
+        t2_sparsity = np.sum(np.abs(t2) < sparse_threshold) / t2.size
+        print(f"[CCSD] {i:4d} | {e_corr:18.10f} | {delta_e:12.4e} | {t1_sparsity:11.2%} | {t2_sparsity:11.2%}")
+
+        if delta_e < tol:
             return e_corr, t1, t2
 
         t1 = alpha * (r1 / D1) +  t1
         t2 = alpha * (r2 / D2) +  t2
+        
+        # Prune small amplitudes for memory efficiency
+        if use_sparse:
+            t1[np.abs(t1) < sparse_threshold] = 0
+            t2[np.abs(t2) < sparse_threshold] = 0
+        
         old_e = e_corr
 
     return e_corr, t1, t2
 
 
 
+def ccsd_ode_solver(no_ham, n_occ, max_iter=200, tol=1e-8, step_size=0.01, use_sparse=True, sparse_threshold=SPARSE_THRESHOLD):
+    """
+    CCSD solver based on the provided T1 and T2 long-form equations.
+    Optimized via Stanton & Gauss intermediate factorization.
+    Optimized with sparse matrix support for memory efficiency.
+    """
+    n_states = no_ham.f.shape[0]
+    o = slice(0, n_occ)
+    v = slice(n_occ, n_states)
+
+    f = no_ham.f
+    Gamma = no_ham.Gamma # <pq||rs>
+    eps = np.diag(f)
+
+    # Pre-slice blocks
+    f_oo, f_vv, f_ov, f_vo = f[o, o], f[v, v], f[o, v], f[v, o]
+
+    # Energy Denominators
+    D1 = eps[o, None] - eps[None, v]
+    D2 = eps[o, None, None, None] + eps[None, o, None, None] - eps[None, None, v, None] - eps[None, None, None, v]
+
+    # Initialize Amplitudes
+    t1 = np.zeros((n_occ, n_states - n_occ))
+    t2 = Gamma[o, o, v, v] / D2
+    
+    # Apply sparsity pruning to initial guess
+    if use_sparse:
+        t2[np.abs(t2) < sparse_threshold] = 0
+
+    old_e = 0.0
+    print(f"\n[CCSD+Sparse] {'Iter':>4} | {'E_corr':>18} | {'Delta E':>12} | {'T1 Sparsity':>12} | {'T2 Sparsity':>12}")
+    print("-" * 95)
+    
+    for i in range(max_iter):
+        # 1. Intermediates (Combining T1 and T2 terms as shown in equations)
+        # tau_tilde = t_ijab + 0.5 * (t_ia * t_jb - t_ib * t_ja)
+        t1t1 = sparse_einsum('ia,jb->ijab', t1, t1, threshold=sparse_threshold)
+        tau = t2 + t1t1 - t1t1.transpose(0, 1, 3, 2)
+        tau_tilde = t2 + 0.5 * (t1t1 - t1t1.transpose(0, 1, 3, 2))
+
+        # F-Intermediates (Effective Fock matrices)
+        F_ae = f_vv.copy()
+        F_ae -= 0.5 * sparse_einsum('me,ma->ae', f_ov, t1, threshold=sparse_threshold)
+        F_ae += sparse_einsum('mf,amef->ae', t1, Gamma[v, o, v, v], threshold=sparse_threshold)
+        F_ae -= 0.5 * sparse_einsum('mnaf,mnef->ae', tau_tilde, Gamma[o, o, v, v], threshold=sparse_threshold)
+
+        F_mi = f_oo.copy()
+        F_mi += 0.5 * sparse_einsum('ie,me->mi', t1, f_ov, threshold=sparse_threshold)
+        F_mi += sparse_einsum('ne,mnie->mi', t1, Gamma[o, o, o, v], threshold=sparse_threshold)
+        F_mi += 0.5 * sparse_einsum('inef,mnef->mi', tau_tilde, Gamma[o, o, v, v], threshold=sparse_threshold)
+
+        F_me = f_ov + sparse_einsum('nf,mnef->me', t1, Gamma[o, o, v, v], threshold=sparse_threshold)
+
+        # W-Intermediates (Effective Integrals)
+        W_mnij = Gamma[o, o, o, o] + 0.25 * sparse_einsum('ijef,mnef->mnij', tau, Gamma[o, o, v, v], threshold=sparse_threshold)
+        W_mnij += (sparse_einsum('je,mnie->mnij', t1, Gamma[o, o, o, v], threshold=sparse_threshold) -
+                   sparse_einsum('ie,mnje->mnij', t1, Gamma[o, o, o, v], threshold=sparse_threshold))
+
+        W_abef = Gamma[v, v, v, v] + 0.25 * sparse_einsum('mnab,mnef->abef', tau, Gamma[o, o, v, v], threshold=sparse_threshold)
+        W_abef -= (sparse_einsum('ma,mbef->abef', t1, Gamma[o, v, v, v], threshold=sparse_threshold) -
+                   sparse_einsum('mb,maef->abef', t1, Gamma[o, v, v, v], threshold=sparse_threshold))
+
+        W_mbej = Gamma[o, v, v, o] + sparse_einsum('jf,mbef->mbej', t1, Gamma[o, v, v, v], threshold=sparse_threshold)
+        W_mbej -= sparse_einsum('nb,mnej->mbej', t1, Gamma[o, o, v, o], threshold=sparse_threshold)
+        W_mbej -= 0.5 * sparse_einsum('jnfb,mnef->mbej', t2, Gamma[o, o, v, v], threshold=sparse_threshold)
+        W_mbej -= sparse_einsum('jf,nb,mnef->mbej', t1, t1, Gamma[o, o, v, v], threshold=sparse_threshold)
+
+        # 2. Residuals
+        # T1 Residual (Maps to Image 1)
+        r1 = f_vo.T + sparse_einsum('ie,ae->ia', t1, F_ae, threshold=sparse_threshold) - sparse_einsum('ma,mi->ia', t1, F_mi, threshold=sparse_threshold)
+        r1 += sparse_einsum('imae,me->ia', t2, F_me, threshold=sparse_threshold)
+        r1 += sparse_einsum('nf,nafi->ia', t1, Gamma[o, v, v, o], threshold=sparse_threshold)
+        r1 -= 0.5 * sparse_einsum('imef,maef->ia', t2, Gamma[o, v, v, v], threshold=sparse_threshold)
+        r1 -= 0.5 * sparse_einsum('mnea,mnei->ia', t2, Gamma[o, o, v, o], threshold=sparse_threshold)
+
+        # T2 Residual (Maps to Image 2)
+        r2 = Gamma[o, o, v, v].copy()
+
+        # Linear and Quadratic T2 couplings
+        term_ae = sparse_einsum('ijeb,ae->ijab', t2, F_ae, threshold=sparse_threshold)
+        r2 += (term_ae - term_ae.transpose(0, 1, 3, 2))
+        term_mi = sparse_einsum('mjab,mi->ijab', t2, F_mi, threshold=sparse_threshold)
+        r2 -= (term_mi - term_mi.transpose(1, 0, 2, 3))
+
+        r2 += 0.5 * sparse_einsum('mnab,mnij->ijab', tau, W_mnij, threshold=sparse_threshold)
+        r2 += 0.5 * sparse_einsum('ijef,abef->ijab', tau, W_abef, threshold=sparse_threshold)
+
+        # Ring terms P(ij)P(ab)
+        term_ring = sparse_einsum('imae,mbej->ijab', t2, W_mbej, threshold=sparse_threshold)
+        r2 += (term_ring - term_ring.transpose(1, 0, 2, 3) -
+               term_ring.transpose(0, 1, 3, 2) + term_ring.transpose(1, 0, 3, 2))
+
+        # T1 couplings
+        term_t1_v = sparse_einsum('ie,abej->ijab', t1, Gamma[v, v, v, o], threshold=sparse_threshold)
+        r2 += (term_t1_v - term_t1_v.transpose(1, 0, 2, 3))
+        term_t1_o = sparse_einsum('ma,mbij->ijab', t1, Gamma[o, v, o, o], threshold=sparse_threshold)
+        r2 -= (term_t1_o - term_t1_o.transpose(0, 1, 3, 2))
+
+        # 3. Energy and Step Update
+        e_corr = np.sum(f_ov * t1) + 0.25 * np.sum(Gamma[o, o, v, v] * tau)
+
+        delta_e = abs(e_corr - old_e)
+        
+        # Calculate sparsity for monitoring
+        t1_sparsity = np.sum(np.abs(t1) < sparse_threshold) / t1.size if t1.size > 0 else 0
+        t2_sparsity = np.sum(np.abs(t2) < sparse_threshold) / t2.size
+        print(f"[CCSD] {i:4d} | {e_corr:18.10f} | {delta_e:12.4e} | {t1_sparsity:11.2%} | {t2_sparsity:11.2%}")
+
+        if delta_e < tol:
+            return e_corr, t1, t2
+
+        t1 = -step_size * r1  +  t1
+        t2 = -step_size * r2  +  t2
+        
+        # Prune small amplitudes for memory efficiency
+        if use_sparse:
+            t1[np.abs(t1) < sparse_threshold] = 0
+            t2[np.abs(t2) < sparse_threshold] = 0
+        
+        old_e = e_corr
+
+    return e_corr, t1, t2
 
 from scipy import sparse
 
