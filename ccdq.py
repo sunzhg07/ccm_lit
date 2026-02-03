@@ -17,7 +17,7 @@ def sparse_einsum(subscripts, *operands, threshold=SPARSE_THRESHOLD):
     Perform einsum with automatic sparsity detection.
     Prunes small values after contraction.
     """
-    result = np.einsum(subscripts, *operands, optimize=True)
+    result = contract(subscripts, *operands, optimize='auto')
     result[np.abs(result) < threshold] = 0
     return result
 
@@ -340,14 +340,7 @@ def ccdq(no_ham, n_occ, max_iter=100, tol=1e-8, alpha=0.5, use_sparse=True,
     D2 = (eps[o, None, None, None] + eps[None, o, None, None]
           - eps[None, None, v, None] - eps[None, None, None, v])
     
-    D4 = (eps[o, None, None, None, None, None, None, None]
-          + eps[None, o, None, None, None, None, None, None]
-          + eps[None, None, o, None, None, None, None, None]
-          + eps[None, None, None, o, None, None, None, None]
-          - eps[None, None, None, None, v, None, None, None]
-          - eps[None, None, None, None, None, v, None, None]
-          - eps[None, None, None, None, None, None, v, None]
-          - eps[None, None, None, None, None, None, None, v])
+    # D4 tensor allocation deleted to save memory (calculated on-the-fly)
 
     # Initialize amplitudes - T2
     if initial_t2 is not None:
@@ -355,19 +348,21 @@ def ccdq(no_ham, n_occ, max_iter=100, tol=1e-8, alpha=0.5, use_sparse=True,
     else:
         # MP2 guess
         t2 = Gamma[o, o, v, v] / D2
-        
-    if use_sparse:
-        t2[np.abs(t2) < sparse_threshold] = 0
-    
-    # T4 initial guess
+
+    # Initialize amplitudes - T4
     if initial_t4 is not None:
         t4 = initial_t4.copy()
     else:
         # Initialize T4 with zeros as requested
-        t4 = np.zeros_like(D4)
-        
+        # Explicit shape required since D4 is removed
+        t4_shape = (n_occ, n_occ, n_occ, n_occ, n_virt, n_virt, n_virt, n_virt)
+        t4 = np.zeros(t4_shape, dtype=t2.dtype)
+
     if use_sparse:
+        t2[np.abs(t2) < sparse_threshold] = 0
         t4[np.abs(t4) < sparse_threshold] = 0
+    
+    # T4 already initialized above
     
     # If we didn't calculate v_oovv yet (because we used initial_t4), define it now
     if 'v_oovv' not in locals():
@@ -401,6 +396,7 @@ def ccdq(no_ham, n_occ, max_iter=100, tol=1e-8, alpha=0.5, use_sparse=True,
         print(f"  Virtual orbitals:  {n_virt}")
         print(f"  T2 dimension: {t2.shape}")
         print(f"  T4 dimension: {t4.shape}")
+        print(f"  T4 Memory:    {t4.nbytes / (1024**2):.2f} MB")
         print(f"  Sparse mode: {use_sparse}, threshold: {sparse_threshold:.2e}")
         print(f"{'='*80}\n")
         print(f"{'Iter':>4} | {'E_corr':>16} | {'ΔE':>12} | {'|R2|':>10} | {'|R4|':>10} | {'T2 Sp':>7} | {'T4 Sp':>7}")
@@ -468,63 +464,42 @@ def ccdq(no_ham, n_occ, max_iter=100, tol=1e-8, alpha=0.5, use_sparse=True,
         # ====================================================================
         r4 = np.zeros_like(t4)
         
-        # Term 1: P(a/bcd)P(i/jkl) V^{am}_{ie} t^{bcde}_{jklm}
-        # Result[i,j,k,l,a,b,c,d] = sum_{m,e} V[a,m,i,e] * t4[j,k,l,m,b,c,d,e]
-        term1 = sparse_einsum('amie,jklmbcde->ijklabcd', Gamma[v, o, o, v], t4, threshold=sparse_threshold)
-        r4 += permute_a_bcd(permute_i_jkl(term1))
+        # Term 1 + 9: Grouped into I_amie (Effective PH Interaction)
+        # I_amie = <am||ie> + <nm||fe>*t2_in^af
+        term_ring = sparse_einsum('amie,jklmbcde->ijklabcd', I_amie, t4, threshold=sparse_threshold)
+        r4 += permute_a_bcd(permute_i_jkl(term_ring))
         
-        # Term 2: (1/2) P(ij/kl) V^{mn}_{ij} t^{cdab}_{klmn}
-        # Result[i,j,k,l,a,b,c,d] = sum_{m,n} V[m,n,i,j] * t4[k,l,m,n,c,d,a,b]
-        term2 = sparse_einsum('mnij,klmncdab->ijklabcd', Gamma[o, o, o, o], t4, threshold=sparse_threshold)
-        r4 += 0.5 * permute_ij_kl(term2)
+        # Term 2 + 10: Grouped into I_oooo (Effective Hole Interaction)
+        # I_oooo = 0.5*<mn||ij> + 0.25*<mn||ef>*t2_ij^ef
+        term_ldr_o = sparse_einsum('mnij,klmncdab->ijklabcd', I_oooo, t4, threshold=sparse_threshold)
+        r4 += permute_ij_kl(term_ldr_o)
         
-        # Term 3: (1/2) P(ab/cd) V^{ab}_{ef} t^{cdef}_{klij}
-        # Result[i,j,k,l,a,b,c,d] = sum_{e,f} V[a,b,e,f] * t4[k,l,i,j,c,d,e,f]
-        term3 = sparse_einsum('abef,klijcdef->ijklabcd', Gamma[v, v, v, v], t4, threshold=sparse_threshold)
-        r4 += 0.5 * permute_ab_cd(term3)
-        
+        # Term 3 + 8: Grouped into I_vvvv (Effective Particle Interaction)
+        # I_vvvv = 0.5*<ab||ef> + 0.25*<mn||ef>*t2_mn^ab
+        term_ldr_v = sparse_einsum('abef,klijcdef->ijklabcd', I_vvvv, t4, threshold=sparse_threshold)
+        r4 += permute_ab_cd(term_ldr_v)
+
         # Term 4: -P(i/jkl) f^{m}_{i} t^{bcda}_{jklm}
-        # Result[i,j,k,l,a,b,c,d] = sum_{m} f[m,i] * t4[j,k,l,m,b,c,d,a]
         term4 = sparse_einsum('mi,jklmbcda->ijklabcd', f[o, o], t4, threshold=sparse_threshold)
         r4 -= permute_i_jkl(term4)
         
         # Term 5: +P(a/bcd) f^{a}_{e} t^{bcde}_{jkli}
-        # Result[i,j,k,l,a,b,c,d] = sum_{e} f[a,e] * t4[j,k,l,i,b,c,d,e]
         term5 = sparse_einsum('ae,jklibcde->ijklabcd', f[v, v], t4, threshold=sparse_threshold)
         r4 += permute_a_bcd(term5)
         
         # Term 6: (1/2) P(ab/cd)P(i/jkl) V^{mn}_{ef} t^{ab}_{im} t^{efcd}_{njkl}
-        # Result[i,j,k,l,a,b,c,d] = sum_{m,n,e,f} V[m,n,e,f] * t2[i,m,a,b] * t4[n,j,k,l,e,f,c,d]
         term6 = sparse_einsum('mnef,imab,njklefcd->ijklabcd', v_oovv, t2, t4, threshold=sparse_threshold)
         r4 += 0.5 * permute_ab_cd(permute_i_jkl(term6))
         
         # Term 7: (1/2) P(a/bcd)P(ij/kl) V^{mn}_{ef} t^{ae}_{ij} t^{fbcd}_{mnkl}
-        # Result[i,j,k,l,a,b,c,d] = sum_{m,n,e,f} V[m,n,e,f] * t2[i,j,a,e] * t4[m,n,k,l,f,b,c,d]
         term7 = sparse_einsum('mnef,ijae,mnklfbcd->ijklabcd', v_oovv, t2, t4, threshold=sparse_threshold)
         r4 += 0.5 * permute_a_bcd(permute_ij_kl(term7))
         
-        # Term 8: (1/4) P(ab/cd) V^{mn}_{ef} t^{ab}_{mn} t^{efcd}_{ijkl}
-        # Result[i,j,k,l,a,b,c,d] = sum_{m,n,e,f} V[m,n,e,f] * t2[m,n,a,b] * t4[i,j,k,l,e,f,c,d]
-        term8 = sparse_einsum('mnef,mnab,ijklefcd->ijklabcd', v_oovv, t2, t4, threshold=sparse_threshold)
-        r4 += 0.25 * permute_ab_cd(term8)
-        
-        # Term 9: P(a/bcd)P(i/jkl) V^{mn}_{ef} t^{ae}_{im} t^{fbcd}_{njkl}
-        # Result[i,j,k,l,a,b,c,d] = sum_{m,n,e,f} V[m,n,e,f] * t2[i,m,a,e] * t4[n,j,k,l,f,b,c,d]
-        term9 = sparse_einsum('mnef,imae,njklfbcd->ijklabcd', v_oovv, t2, t4, threshold=sparse_threshold)
-        r4 += permute_a_bcd(permute_i_jkl(term9))
-        
-        # Term 10: (1/4) P(ij/kl) V^{mn}_{ef} t^{ef}_{ij} t^{abcd}_{mnkl}
-        # Result[i,j,k,l,a,b,c,d] = sum_{m,n,e,f} V[m,n,e,f] * t2[i,j,e,f] * t4[m,n,k,l,a,b,c,d]
-        term10 = sparse_einsum('mnef,ijef,mnklabcd->ijklabcd', v_oovv, t2, t4, threshold=sparse_threshold)
-        r4 += 0.25 * permute_ij_kl(term10)
-         
         # Term 11: (1/2) P(a/bcd) V^{mn}_{ef} t^{ae}_{mn} t^{fbcd}_{ijkl}
-        # Result[i,j,k,l,a,b,c,d] = sum_{m,n,e,f} V[m,n,e,f] * t2[m,n,a,e] * t4[i,j,k,l,f,b,c,d]
         term11 = sparse_einsum('mnef,mnae,ijklfbcd->ijklabcd', v_oovv, t2, t4, threshold=sparse_threshold)
         r4 += 0.5 * permute_a_bcd(term11)
         
         # Term 12: (1/2) P(i/jkl) V^{mn}_{ef} t^{ef}_{im} t^{abcd}_{njkl}
-        # Result[i,j,k,l,a,b,c,d] = sum_{m,n,e,f} V[m,n,e,f] * t2[i,m,e,f] * t4[n,j,k,l,a,b,c,d]
         term12 = sparse_einsum('mnef,imef,njklabcd->ijklabcd', v_oovv, t2, t4, threshold=sparse_threshold)
         r4 += 0.5 * permute_i_jkl(term12)
         
@@ -600,7 +575,16 @@ def ccdq(no_ham, n_occ, max_iter=100, tol=1e-8, alpha=0.5, use_sparse=True,
         # ====================================================================
         # Update using energy denominators for proper convergence
         r2_update = alpha * (r2 / (D2 + 1e-14))
-        r4_update = alpha * (r4 / (D4 + 1e-14))
+        # On-the-fly D4 calculation to save memory
+        denom_d4 = (eps[o, None, None, None, None, None, None, None]
+                  + eps[None, o, None, None, None, None, None, None]
+                  + eps[None, None, o, None, None, None, None, None]
+                  + eps[None, None, None, o, None, None, None, None]
+                  - eps[None, None, None, None, v, None, None, None]
+                  - eps[None, None, None, None, None, v, None, None]
+                  - eps[None, None, None, None, None, None, v, None]
+                  - eps[None, None, None, None, None, None, None, v])
+        r4_update = alpha * (r4 / (denom_d4 + 1e-14))
         
         # Clip extreme updates to prevent divergence
         r2_update = np.clip(r2_update, -10.0, 10.0)

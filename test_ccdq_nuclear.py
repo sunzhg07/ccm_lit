@@ -18,8 +18,8 @@ def test_ccdq_nuclear():
     print("="*80)
     
     # Use sd-shell (smaller interaction for testing)
-    snt_file = "sd.snt"
-    #snt_file = "gxpf1a.snt"
+    #snt_file = "sd.snt"
+    snt_file = "gxpf1a.snt"
     
     print(f"\n--- 1. Reading SNT Interaction: {snt_file} ---")
     orbits, potential = read_snt(snt_file)
@@ -55,13 +55,13 @@ def test_ccdq_nuclear():
         occ_indices.append(i+6)
 
 
-    #Z_val = 8  # 2 valence protons
-    #N_val = 8  # 2 valence neutrons
-    #occ_indices=[]
-    #for i in range(8):
-    #    occ_indices.append(i)
-    #for i in range(8):
-    #    occ_indices.append(i+20)
+    Z_val = 8  # 2 valence protons
+    N_val = 8  # 2 valence neutrons
+    occ_indices=[]
+    for i in range(8):
+        occ_indices.append(i)
+    for i in range(8):
+        occ_indices.append(i+20)
     
     print(f"\n--- 4. Hartree-Fock Solution (Z={Z_val}, N={N_val}) ---")
     hf_energy, sp_energies, rho, sp_coeffs = hartree_fock(
