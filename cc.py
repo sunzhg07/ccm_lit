@@ -1,9 +1,37 @@
 
 import numpy as np
-from opt_einsum import contract
+from opt_einsum import contract, contract_expression
 from scipy import sparse
 import time
+import os
 
+# Threading Configuration
+# Suggest setting these if not set, to utilize multi-threading
+if 'OMP_NUM_THREADS' not in os.environ:
+    # Default to a reasonable number if not set (e.g., 4 or 8)
+    # But usually numpy detects available cores. We just print a message or setup.
+    pass
+
+# Optimization: Cache for einsum paths
+# This avoids re-calculating the optimal path every iteration
+_einsum_cache = {}
+
+def cached_contract(subscripts, *operands, **kwargs):
+    """
+    Wrapper around opt_einsum.contract that caches the contraction path.
+    This provides significant speedup for iterative calculations with static shapes.
+    """
+    # Use 'optimal' optimization by default for cached calls as the cost is amortized
+    if 'optimize' not in kwargs:
+        kwargs['optimize'] = 'optimal'
+        
+    shapes = tuple(op.shape for op in operands)
+    key = (subscripts, shapes, frozenset(kwargs.items()))
+    
+    if key not in _einsum_cache:
+        _einsum_cache[key] = contract_expression(subscripts, *shapes, **kwargs)
+        
+    return _einsum_cache[key](*operands)
 
 # Sparse matrix optimization utilities
 SPARSE_THRESHOLD = 1e-12  # Elements below this are considered zero for sparsity
@@ -770,11 +798,14 @@ class DIIS:
         except np.linalg.LinAlgError:
             return self.t_list[-1]
 
-def ccsdt(no_ham, n_occ, max_iter=50, tol=1e-8, alpha=1.0, use_sparse=False, diis_size=6):
+def ccsdt(no_ham, n_occ, max_iter=50, tol=1e-8, alpha=1.0, use_sparse=False, diis_size=6, initial_t1=None, initial_t2=None):
     """
     Optimized CCSDT with reduced redundant contractions, pre-computed intermediates, 
     and DIIS acceleration.
     """
+    # Enable caching for contractions in this function
+    contract = cached_contract
+    
     n_states = no_ham.f.shape[0]
     n_virt = n_states - n_occ
     o = slice(0, n_occ)
@@ -805,8 +836,14 @@ def ccsdt(no_ham, n_occ, max_iter=50, tol=1e-8, alpha=1.0, use_sparse=False, dii
     D3 = (eps_o[:, None, None, None, None, None] + eps_o[None, :, None, None, None, None] + eps_o[None, None, :, None, None, None]
           - eps_v[None, None, None, :, None, None] - eps_v[None, None, None, None, :, None] - eps_v[None, None, None, None, None, :])
 
-    t1 = np.zeros((n_occ, n_virt))
-    t2 = V_oovv / D2
+    if initial_t1 is not None and initial_t2 is not None:
+        t1 = initial_t1.copy()
+        t2 = initial_t2.copy()
+        print("Using provided initial guesses for T1 and T2.")
+    else:
+        t1 = np.zeros((n_occ, n_virt))
+        t2 = V_oovv / D2
+    
     t3 = np.zeros((n_occ, n_occ, n_occ, n_virt, n_virt, n_virt))
     
     t3_size_gb = t3.nbytes / 1e9
@@ -1086,7 +1123,7 @@ def ccsdt(no_ham, n_occ, max_iter=50, tol=1e-8, alpha=1.0, use_sparse=False, dii
     return e_corr, t1, t2, t3
 
 
-def ccdt(no_ham, n_occ, max_iter=50, tol=1e-8, alpha=1.0, use_sparse=False, diis_size=6):
+def ccdt(no_ham, n_occ, max_iter=50, tol=1e-8, alpha=1.0, use_sparse=False, diis_size=6, initial_t2=None):
     """
     CCDT: Coupled Cluster Doubles and Triples (no singles).
     Approximation: T1 = 0 (valid for optimized HF basis).
@@ -1096,6 +1133,8 @@ def ccdt(no_ham, n_occ, max_iter=50, tol=1e-8, alpha=1.0, use_sparse=False, diis
     Accelerated with DIIS.
     """
     import time
+    # Enable caching for contractions in this function
+    contract = cached_contract
     
     n_states = no_ham.f.shape[0]
     n_virt = n_states - n_occ
@@ -1127,7 +1166,13 @@ def ccdt(no_ham, n_occ, max_iter=50, tol=1e-8, alpha=1.0, use_sparse=False, diis
           - eps_v[None, None, None, :, None, None] - eps_v[None, None, None, None, :, None] - eps_v[None, None, None, None, None, :])
 
     # Initialize: NO T1 in CCDT
-    t2 = V_oovv / D2
+    # Initialize: NO T1 in CCDT
+    if initial_t2 is not None:
+        t2 = initial_t2.copy()
+        print("Using provided initial guess for T2.")
+    else:
+        t2 = V_oovv / D2
+        
     t3 = np.zeros((n_occ, n_occ, n_occ, n_virt, n_virt, n_virt))
     
     t3_size_gb = t3.nbytes / 1e9

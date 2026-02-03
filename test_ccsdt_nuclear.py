@@ -17,8 +17,8 @@ def test_ccsdt_nuclear():
     print("="*80)
     
     # Check for SNT files
-#    snt_file = "sd.snt"
-    snt_file = "gxpf1a.snt"
+    snt_file = "sd.snt"
+#    snt_file = "gxpf1a.snt"
     if not os.path.exists(snt_file):
         snt_file = "gxpf1a.snt"
         
@@ -98,21 +98,23 @@ def test_ccsdt_nuclear():
         print(f"CCSD Failed: {e}")
 
     # 4. CCDT
-    print("\nRunning CCDT (Doubles+Triples)...")
+    print("\nRunning CCDT (Doubles+Triples) [Restart from CCSD]...")
     try:
         t0 = time.time()
         # ccdt returns e_corr, t2, t3
-        E_ccdt, t2_dt, t3_dt = ccdt(no_ham, n_occ, max_iter=30, tol=1e-6)
+        # Initialize with T2 from CCSD
+        E_ccdt, t2_dt, t3_dt = ccdt(no_ham, n_occ, max_iter=30, tol=1e-6, initial_t2=t2_ccsd)
         results['CCDT'] = {'E_corr': E_ccdt, 'Total': hf_E + E_ccdt, 'Time': time.time()-t0}
     except Exception as e:
         print(f"CCDT Failed: {e}")
 
     # 5. CCSDT
-    print("\nRunning CCSDT (Singles+Doubles+Triples)...")
+    print("\nRunning CCSDT (Singles+Doubles+Triples) [Restart from CCSD]...")
     try:
         t0 = time.time()
         # ccsdt returns e_corr, t1, t2, t3
-        E_ccsdt, t1, t2, t3 = ccsdt(no_ham, n_occ, max_iter=30, tol=1e-6)
+        # Initialize with T1, T2 from CCSD
+        E_ccsdt, t1, t2, t3 = ccsdt(no_ham, n_occ, max_iter=30, tol=1e-6, initial_t1=t1_ccsd, initial_t2=t2_ccsd)
         results['CCSDT'] = {'E_corr': E_ccsdt, 'Total': hf_E + E_ccsdt, 'Time': time.time()-t0}
     except Exception as e:
         print(f"CCSDT Failed: {e}")
