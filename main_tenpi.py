@@ -51,7 +51,7 @@ def test_ccsdtq_tenpi():
     print(f"\n4. Running Hartree-Fock (Z={Z_val}, N={N_val})")
     hf_energy, sp_energies, rho, sp_coeffs = hartree_fock(
         m_basis, potential, Z_val, N_val, 
-        v2b_sparse=v2b_m, occ_indices=occ_indices
+        v2b_sparse=v2b_m, occ_indices=occ_indices,mode='deformed'
     )
     print(f"   HF Energy: {hf_energy:.6f} MeV")
     

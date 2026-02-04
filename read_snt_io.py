@@ -38,7 +38,7 @@ class Potential:
                 f"non-zero 2b groups: {len(self.v2b)})")
 
 
-def read_snt(filename):
+def read_snt(filename,scale_factor):
     with open(filename, 'r') as f:
         # Skip comment lines until we reach the model space definition
         line = f.readline()
@@ -129,7 +129,7 @@ def read_snt(filename):
             k = int(parts[2]) - 1
             l = int(parts[3]) - 1
             J = int(parts[4])
-            val = float(parts[5])
+            val = float(parts[5])*scale_factor
             
             potential.v2b.append([i, j, k, l, J, val])
             # Typically shell model interactions are symmetric under (ij) <-> (kl)
@@ -253,6 +253,9 @@ def decouple_2b(j_potential, m_scheme):
         m_c_indices = get_m_indices(m_scheme, t)
         m_d_indices = get_m_indices(m_scheme, u)
         
+        nas_factor = 1.0
+        if r == s: nas_factor *= np.sqrt(2.0)
+        if t == u: nas_factor *= np.sqrt(2.0)
         
         # We search for combinations (a,b) and (c,d) that couple to (J, M)
         # Iterate over possible M values for this J
@@ -285,9 +288,6 @@ def decouple_2b(j_potential, m_scheme):
             if not labels_cd: continue
             
             # Outer product of CGs scaled by val and nas_factor
-            nas_factor = 1.0
-            if r == s: nas_factor *= np.sqrt(2.0)
-            if t == u: nas_factor *= np.sqrt(2.0)
             v_base = val*nas_factor
             for i, (a, b) in enumerate(labels_ab):
                 idx_ab = a * n_m + b

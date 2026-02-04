@@ -5,12 +5,16 @@ from hf import hartree_fock, normal_order
 from cc import ccsd, mp2, ccsd_diis_solver, ccd, ccd_diis_solver, ccsd_ode_solver
 
 def main():
-    #snt_file = "gxpf1a.snt"
+    snt_file = "gxpf1a.snt"
     #snt_file = "sd.snt"
-    snt_file = "p.snt"
+    #snt_file = "p.snt"
+
     
     print("--- 1. Reading SNT Interaction ---")
-    orbits, potential = read_snt(snt_file)
+    scale_factor=1.0
+    if(snt_file=="gxpf1a.snt"):
+        scale_factor=(42./56)**(0.30)
+    orbits, potential = read_snt(snt_file,scale_factor)
     print(orbits)
     
     print("\n--- 2. Generating M-Scheme Basis ---")
@@ -36,17 +40,27 @@ def main():
     # Example: occ_indices = [0, 1, 6, 7] for Z=2, N=2
     #occ_indices = [4,5,6,7,8,9,16,17,18,19,20,21]
     #occ_indices = [4,5,16,17]
-    Z_val = 4
-    N_val = 4
-    occ_indices=[]
-    for i in range(4):
-        occ_indices.append(i)
-    for i in range(4):
-        occ_indices.append(i+6)
+    if(snt_file=="gxpf1a.snt"):
+        Z_val = 8
+        N_val = 8
+        occ_indices=[]
+        for i in range(8):
+            occ_indices.append(i)
+        for i in range(8):
+            occ_indices.append(i+20)
+
+    if(snt_file=="p.snt"):
+        Z_val = 4
+        N_val = 4
+        occ_indices=[]
+        for i in range(4):
+            occ_indices.append(i)
+        for i in range(4):
+            occ_indices.append(i+6)
     
     print(f"\n--- 4. Performing Hartree-Fock (Z={Z_val}, N={N_val}) ---")
     hf_energy, sp_energies, rho, sp_coeffs = hartree_fock(m_basis, potential, Z_val, N_val, 
-                                                         v2b_sparse=v2b_m, occ_indices=occ_indices)
+                                                         v2b_sparse=v2b_m, occ_indices=occ_indices,mode='deformed')
     print(f"HF Energy: {hf_energy:.6f} MeV")
     
     print("\nFinal Single Particle Orbits (HF Basis):")
