@@ -13,6 +13,8 @@ from ccsd_tenpi_solver import ccsd_tenpi_solver
 from ccsdt_tenpi_solver import ccsdt_tenpi_solver
 from ccsdtq_tenpi_solver import ccsdtq_tenpi_solver
 from ccdtq_tenpi_solver import ccdtq_tenpi_solver
+from ccdq_tenpi_solver import ccdq_tenpi_solver
+
 
 
 def test_ccsdtq_tenpi():
@@ -85,35 +87,49 @@ def test_ccsdtq_tenpi():
     print(f"   CCSDT Correlation: {e_ccsdt:.6f} MeV")
     print(f"   Total CCSDT Energy: {no_ham.E0 + e_ccsdt:.6f} MeV")
     
-    # Run CCDTQ
-    print(f"\n8. Running CCDTQ (tenpi solver)")
+#    # Run CCDTQ
+#    print(f"\n8. Running CCDTQ (tenpi solver)")
+#    print("=" * 80)
+#    e_ccdtq, t2_ccdtq, t3_ccdtq, t4_ccdtq = ccdtq_tenpi_solver(
+#        no_ham, n_occ,
+#        max_iter=25,
+#        tol=1e-5,
+#        diis_size=3,
+#        diis_start=2,
+#        initial_t2=t2_ccsd,
+#        initial_t3=t3_ccsdt  # Warm start from CCSDT for T3!
+#    )
+#    print(f"   CCDTQ Correlation: {e_ccdtq:.6f} MeV")
+#    print(f"   Total CCDTQ Energy: {no_ham.E0 + e_ccdtq:.6f} MeV")
+#    
+    # Run CCDQ
+    print(f"\n9. Running CCDQ (tenpi solver)")
     print("=" * 80)
-    e_ccdtq, t2_ccdtq, t3_ccdtq, t4_ccdtq = ccdtq_tenpi_solver(
+    e_ccdq, t2_ccdq, t4_ccdq = ccdq_tenpi_solver(
         no_ham, n_occ,
         max_iter=25,
         tol=1e-5,
         diis_size=3,
         diis_start=2,
-        initial_t2=t2_ccsd,
-        initial_t3=t3_ccsdt  # Warm start from CCSDT for T3!
+        initial_t2=t2_ccsd
     )
-    print(f"   CCDTQ Correlation: {e_ccdtq:.6f} MeV")
-    print(f"   Total CCDTQ Energy: {no_ham.E0 + e_ccdtq:.6f} MeV")
+    print(f"   CCDQ Correlation: {e_ccdq:.6f} MeV")
+    print(f"   Total CCDQ Energy: {no_ham.E0 + e_ccdq:.6f} MeV")
+#    
+#    # Run CCSDTQ
+#    print(f"\n10. Running CCSDTQ (tenpi solver) - THIS WILL BE SLOW!")
+#    print("=" * 80)
     
-    # Run CCSDTQ
-    print(f"\n9. Running CCSDTQ (tenpi solver) - THIS WILL BE SLOW!")
-    print("=" * 80)
-    
-    e_ccsdtq, t1, t2, t3, t4 = ccsdtq_tenpi_solver(
-        no_ham, n_occ,
-        max_iter=25,  # Keep small for testing
-        tol=1e-5,     # Slightly relaxed tolerance
-        diis_size=3,  # Smaller DIIS for memory
-        diis_start=2,
-        initial_t1=t1_ccsd,
-        initial_t2=t2_ccsd,
-        initial_t3=t3_ccsdt  # Warm start from CCSDT!
-    )
+#    e_ccsdtq, t1, t2, t3, t4 = ccsdtq_tenpi_solver(
+#        no_ham, n_occ,
+#        max_iter=25,  # Keep small for testing
+#        tol=1e-5,     # Slightly relaxed tolerance
+#        diis_size=3,  # Smaller DIIS for memory
+#        diis_start=2,
+#        initial_t1=t1_ccsd,
+#        initial_t2=t2_ccsd,
+#        initial_t3=t3_ccsdt  # Warm start from CCSDT!
+#    )
     
     print("=" * 80)
     print(f"\nResults Summary:")
@@ -121,6 +137,7 @@ def test_ccsdtq_tenpi():
     print(f"  CCSD Correlation:     {e_ccsd:.6f} MeV")
     print(f"  CCSDT Correlation:    {e_ccsdt:.6f} MeV")
     print(f"  CCDTQ Correlation:    {e_ccdtq:.6f} MeV")
+    print(f"  CCDQ Correlation:     {e_ccdq:.6f} MeV")
     print(f"  CCSDTQ Correlation:   {e_ccsdtq:.6f} MeV")
     print(f"  Total CCSDTQ Energy:  {no_ham.E0 + e_ccsdtq:.6f} MeV")
     
