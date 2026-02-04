@@ -75,7 +75,7 @@ def test_ccsdtq_tenpi():
     print("-" * 80)
     e_ccsdt, t1_ccsdt, t2_ccsdt, t3_ccsdt = ccsdt_tenpi_solver(
         no_ham, n_occ,
-        max_iter=10,
+        max_iter=25,
         tol=1e-6,
         diis_size=4,
         diis_start=3,
@@ -90,7 +90,7 @@ def test_ccsdtq_tenpi():
     print("=" * 80)
     e_ccdtq, t2_ccdtq, t3_ccdtq, t4_ccdtq = ccdtq_tenpi_solver(
         no_ham, n_occ,
-        max_iter=10,
+        max_iter=25,
         tol=1e-5,
         diis_size=3,
         diis_start=2,
@@ -106,7 +106,7 @@ def test_ccsdtq_tenpi():
     
     e_ccsdtq, t1, t2, t3, t4 = ccsdtq_tenpi_solver(
         no_ham, n_occ,
-        max_iter=10,  # Keep small for testing
+        max_iter=25,  # Keep small for testing
         tol=1e-5,     # Slightly relaxed tolerance
         diis_size=3,  # Smaller DIIS for memory
         diis_start=2,

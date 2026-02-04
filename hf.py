@@ -51,7 +51,9 @@ def hartree_fock(m_basis, j_potential, n_p_val, n_n_val, v2b_sparse=None, max_it
     # Determine symmetry sectors and target counts
     symmetry_keys = []
     for i in range(n_states):
+        # spherical
         #key = (m_basis.l[i] % 2, m_basis.j[i], m_basis.jz[i], m_basis.tz[i])
+        # deformed
         key = (m_basis.l[i] % 2, m_basis.jz[i], m_basis.tz[i])
         symmetry_keys.append(key)
     
