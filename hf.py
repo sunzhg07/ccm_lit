@@ -51,6 +51,7 @@ def hartree_fock(m_basis, j_potential, n_p_val, n_n_val, v2b_sparse=None, max_it
     # Determine symmetry sectors and target counts
     symmetry_keys = []
     for i in range(n_states):
+        #key = (m_basis.l[i] % 2, m_basis.j[i], m_basis.jz[i], m_basis.tz[i])
         key = (m_basis.l[i] % 2, m_basis.jz[i], m_basis.tz[i])
         symmetry_keys.append(key)
     
@@ -103,7 +104,10 @@ def hartree_fock(m_basis, j_potential, n_p_val, n_n_val, v2b_sparse=None, max_it
                 new_rho += np.outer(full_v, full_v)
         
         # Calculate HF energy: E = Tr(rho * v1b) + 0.5 * Tr(rho * (F - v1b))
-        energy = np.sum(new_rho * v1b) + 0.5 * np.sum(new_rho * (fock - v1b))
+        e1b = np.sum(new_rho * v1b)
+        e2b = 0.5 * np.sum(new_rho * (fock - v1b))
+        energy = e1b + e2b
+        print(f"   E1B: {e1b:.8f}, E2B: {e2b:.8f}")
         
         delta_e = abs(energy - old_energy)
         print(f"{iteration:4d} | {energy:15.8f} | {delta_e:12.4e}")

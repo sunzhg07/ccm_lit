@@ -2,13 +2,12 @@ import numpy as np
 from opt_einsum import contract
 from read_snt_io import read_snt, generate_m_scheme, decouple_1b, decouple_2b,recouple_2b
 from hf import hartree_fock, normal_order
-from cc import ccsd, mp2, ccsd_diis_solver,ccd,ccd_diis_solver,ccsd_ode_solver
-from lambda_cc import lambda_ccsd, lambda_ccsdt, compute_properties
-from similarity_transform import similarity_transform_t1, similarity_transform_t1_t2, similarity_transform_l1
+from cc import ccsd, mp2, ccsd_diis_solver, ccd, ccd_diis_solver, ccsd_ode_solver
 
 def main():
-    snt_file = "gxpf1a.snt"
-    #snt_file = "usdb.snt"
+    #snt_file = "gxpf1a.snt"
+    #snt_file = "sd.snt"
+    snt_file = "p.snt"
     
     print("--- 1. Reading SNT Interaction ---")
     orbits, potential = read_snt(snt_file)
@@ -35,15 +34,15 @@ def main():
     
     # Custom initial occupation (set to None for automatic energy-based)
     # Example: occ_indices = [0, 1, 6, 7] for Z=2, N=2
-    occ_indices = [4,5,6,7,8,9,16,17,18,19,20,21]
+    #occ_indices = [4,5,6,7,8,9,16,17,18,19,20,21]
     #occ_indices = [4,5,16,17]
-    Z_val = 8
-    N_val = 8
+    Z_val = 4
+    N_val = 4
     occ_indices=[]
-    for i in range(8):
+    for i in range(4):
         occ_indices.append(i)
-    for i in range(8):
-        occ_indices.append(i+20)
+    for i in range(4):
+        occ_indices.append(i+6)
     
     print(f"\n--- 4. Performing Hartree-Fock (Z={Z_val}, N={N_val}) ---")
     hf_energy, sp_energies, rho, sp_coeffs = hartree_fock(m_basis, potential, Z_val, N_val, 
@@ -66,7 +65,8 @@ def main():
         jz = m_basis.jz[dom_idx]
         tz = m_basis.tz[dom_idx]
         
-        print(f"{i:3d} | {status:4s} | {n:2d} {l:2d} {j:2d} {jz:3d} {tz:3d} | {sp_energies[i]:10.6f}")
+        purity = sp_coeffs[dom_idx, i]**2
+        print(f"{i:3d} | {status:4s} | {n:2d} {l:2d} {j:2d} {jz:3d} {tz:3d} | {sp_energies[i]:10.6f} | {purity:6.4f}")
     
     print("\n--- 5. Performing Normal Ordering ---")
     no_ham = normal_order(m_basis, potential, hf_energy, sp_energies, rho, sp_coeffs, v2b_sparse=v2b_m)
@@ -76,28 +76,19 @@ def main():
     e_corr_mp2 = mp2(no_ham, n_occ)
     print(f"MP2 Correlation Energy: {e_corr_mp2:.6f} MeV")
 
-    #print("\n--- CCD ---")
-    #e_ccd, t2_ccd = ccd_diis_solver(no_ham, n_occ, max_iter=50, tol=1e-6 )
-    #print(f"CCD correlation energy: {e_ccd:.6f} MeV")
-    #print(f"Total CCD energy: {no_ham.E0 + e_ccd:.6f} MeV")
-    #
-
+    print("\n--- CCD ---")
+    e_ccd, t2_ccd = ccd_diis_solver(no_ham, n_occ, max_iter=50, tol=1e-6 )
+    print(f"CCD correlation energy: {e_ccd:.6f} MeV")
+    print(f"Total CCD energy: {no_ham.E0 + e_ccd:.6f} MeV")
+    
 
     print("\n--- 6a. Performing CCSD ")
     e_corr_ccsd, t1_ccsd, t2_ccsd = ccsd_diis_solver(no_ham, n_occ, max_iter=50)
     print(f"CCSD Correlation Energy: {e_corr_ccsd:.6f} MeV")
     print(f"Total CCSD Energy: {no_ham.E0 + e_corr_ccsd:.6f} MeV")
 
-    print("\n--- 6a. Performing CCSD by solving a ODE ")
-    e_corr_ccsd, t1_ccsd, t2_ccsd = ccsd_ode_solver(no_ham, n_occ, max_iter=50,step_size=0.05)
-    print(f"CCSD Correlation Energy: {e_corr_ccsd:.6f} MeV")
-    print(f"Total CCSD Energy: {no_ham.E0 + e_corr_ccsd:.6f} MeV")
-
-
-    #l1_t, l2_t = lambda_ccsd(no_ham, t1_ccsd, t2_ccsd,  n_occ, max_iter=30)
-    
 
 if __name__ == "__main__":
-
     main()
+
 #write a function to transform a operator with one body and twobody with \Lambda_1 a deexcitation operator

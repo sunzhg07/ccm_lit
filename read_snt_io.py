@@ -253,9 +253,6 @@ def decouple_2b(j_potential, m_scheme):
         m_c_indices = get_m_indices(m_scheme, t)
         m_d_indices = get_m_indices(m_scheme, u)
         
-        nas_factor = 1.0
-        if r == s: nas_factor *= np.sqrt(2.0)
-        if t == u: nas_factor *= np.sqrt(2.0)
         
         # We search for combinations (a,b) and (c,d) that couple to (J, M)
         # Iterate over possible M values for this J
@@ -288,8 +285,10 @@ def decouple_2b(j_potential, m_scheme):
             if not labels_cd: continue
             
             # Outer product of CGs scaled by val and nas_factor
-            # V_m(a,b,c,d) += CG_ab * CG_cd * val * nas_factor
-            v_base = val*((42./56)**(0.30)) * nas_factor
+            nas_factor = 1.0
+            if r == s: nas_factor *= np.sqrt(2.0)
+            if t == u: nas_factor *= np.sqrt(2.0)
+            v_base = val*nas_factor
             for i, (a, b) in enumerate(labels_ab):
                 idx_ab = a * n_m + b
                 idx_ba = b * n_m + a
@@ -350,12 +349,10 @@ def recouple_2b(v2b_m, m_scheme, j_potential):
         m_c_indices = get_m_indices(m_scheme, t)
         m_d_indices = get_m_indices(m_scheme, u)
         
-        nas_factor = 1.0
-        if r == s: nas_factor *= np.sqrt(2.0)
-        if t == u: nas_factor *= np.sqrt(2.0)
         
         # Scalar operator: <J||V||J> is independent of M. We can take M=J for simplicity or average.
         # Let's sum over all M and divide by (2J+1)
+
         total_val = 0.0
         for two_M in range(-two_J, two_J + 1, 2):
             sum_m = 0.0
@@ -380,7 +377,7 @@ def recouple_2b(v2b_m, m_scheme, j_potential):
                             sum_m += cg_ab * cg_cd * v2b_m[idx_ab, idx_cd]
             total_val += sum_m
             
-        final_val = (total_val / nas_factor) / (J * 2 + 1)
+        final_val = total_val / (J * 2 + 1)
         j_elements.append([r, s, t, u, J, final_val])
         
     return j_elements
