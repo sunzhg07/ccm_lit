@@ -10,7 +10,7 @@ def main():
     #snt_file = "p.snt"
 
     
-    print("--- 1. Reading SNT Interaction ---")
+    print("--- 1. reading snt interaction ---")
     scale_factor=1.0
     if(snt_file=="gxpf1a.snt"):
         scale_factor=(42./56)**(0.30)

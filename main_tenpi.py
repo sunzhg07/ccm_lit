@@ -26,9 +26,13 @@ def test_ccsdtq_tenpi():
     
     # ... (rest of the setup unchanged) ...
     # Read interaction
-    snt_file = "p.snt"
-    print(f"\n1. Reading interaction from {snt_file}")
-    orbits, potential = read_snt(snt_file)
+    snt_file='p.snt'
+    print("--- 1. reading snt interaction ---")
+    scale_factor=1.0
+    if(snt_file=="gxpf1a.snt"):
+        scale_factor=(42./56)**(0.30)
+    orbits, potential = read_snt(snt_file,scale_factor)
+    print(orbits)
     
     # Generate m-scheme basis
     print("\n2. Generating m-scheme basis")
