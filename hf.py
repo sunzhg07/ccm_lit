@@ -47,7 +47,6 @@ def hartree_fock(m_basis, j_potential, n_p_val, n_n_val, v2b_sparse=None, max_it
     rho = np.zeros((n_states, n_states))
     for i in occupied:
         rho[i, i] = 1.0
-    print(rho)
     # Determine symmetry sectors and target counts
     symmetry_keys = []
     for i in range(n_states):

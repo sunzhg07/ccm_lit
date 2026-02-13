@@ -2,7 +2,7 @@ import numpy as np
 from opt_einsum import contract
 from read_snt_io import read_snt, generate_m_scheme, decouple_1b, decouple_2b,recouple_2b
 from hf import hartree_fock, normal_order
-from cc import ccsd, mp2, ccsd_diis_solver, ccd, ccd_diis_solver, ccsd_ode_solver
+from cc import ccsd, mp2, ccsd_diis_solver, ccd, ccd_diis_solver, ccsd_ode_solver,ccsdt
 
 def main():
     snt_file = "gxpf1a.snt"
@@ -90,16 +90,22 @@ def main():
     e_corr_mp2 = mp2(no_ham, n_occ)
     print(f"MP2 Correlation Energy: {e_corr_mp2:.6f} MeV")
 
-    print("\n--- CCD ---")
-    e_ccd, t2_ccd = ccd_diis_solver(no_ham, n_occ, max_iter=50, tol=1e-6 )
-    print(f"CCD correlation energy: {e_ccd:.6f} MeV")
-    print(f"Total CCD energy: {no_ham.E0 + e_ccd:.6f} MeV")
-    
-
-    print("\n--- 6a. Performing CCSD ")
-    e_corr_ccsd, t1_ccsd, t2_ccsd = ccsd_diis_solver(no_ham, n_occ, max_iter=50)
-    print(f"CCSD Correlation Energy: {e_corr_ccsd:.6f} MeV")
-    print(f"Total CCSD Energy: {no_ham.E0 + e_corr_ccsd:.6f} MeV")
+#    print("\n--- CCD ---")
+#    e_ccd, t2_ccd = ccd_diis_solver(no_ham, n_occ, max_iter=50, tol=1e-6 )
+#    print(f"CCD correlation energy: {e_ccd:.6f} MeV")
+#    print(f"Total CCD energy: {no_ham.E0 + e_ccd:.6f} MeV")
+#    
+#
+#    print("\n--- 6a. Performing CCSD ")
+#    e_corr_ccsd, t1_ccsd, t2_ccsd = ccsd_diis_solver(no_ham, n_occ, max_iter=50)
+#    print(f"CCSD Correlation Energy: {e_corr_ccsd:.6f} MeV")
+#    print(f"Total CCSD Energy: {no_ham.E0 + e_corr_ccsd:.6f} MeV")
+#
+#
+#    print("\n--- 6b. Performing CCSDT ")
+#    e_corr_ccsdt, t1_ccsdt, t2_ccsdt, t3_ccsdt = ccsdt(no_ham, n_occ, max_iter=50)
+#    print(f"CCSD Correlation Energy: {e_corr_ccsdt:.6f} MeV")
+#    print(f"Total CCSD Energy: {no_ham.E0 + e_corr_ccsdt:.6f} MeV")
 
 
 if __name__ == "__main__":
