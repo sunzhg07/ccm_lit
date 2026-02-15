@@ -83,9 +83,8 @@ def compute_matrix_elements(n1, l1, j1, m1, n2, l2, j2, m2, hw):
     rad_int = radial_integral_r2(n1, l1, n2, l2, b)
     
     # -- Q20 (L=2, M=0) --
-    # Convention: prolate (high |jz|) → positive Q20, oblate (low |jz|) → negative Q20
     ang_20 = angular_matrix_element(j1, m1, j2, m2, 2, 0)
-    q20 = -rad_int * ang_20
+    q20 = rad_int * ang_20
     
     # -- Q22 (L=2, M=2) --
     ang_22 = angular_matrix_element(j1, m1, j2, m2, 2, 2)

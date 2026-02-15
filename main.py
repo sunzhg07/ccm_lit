@@ -7,13 +7,15 @@ from cc import ccsd, mp2, ccsd_diis_solver, ccd, ccd_diis_solver, ccsd_ode_solve
 def main():
     snt_file = "gxpf1a.snt"
     #snt_file = "sd.snt"
-    #snt_file = "p.snt"
+    snt_file = "p.snt"
 
     
     print("--- 1. reading snt interaction ---")
     scale_factor=1.0
     if(snt_file=="gxpf1a.snt"):
         scale_factor=(42./56)**(0.30)
+    if(snt_file=="p.snt"):
+        scale_factor=1.
     orbits, potential = read_snt(snt_file,scale_factor)
     print(orbits)
     
@@ -90,16 +92,16 @@ def main():
     e_corr_mp2 = mp2(no_ham, n_occ)
     print(f"MP2 Correlation Energy: {e_corr_mp2:.6f} MeV")
 
-#    print("\n--- CCD ---")
-#    e_ccd, t2_ccd = ccd_diis_solver(no_ham, n_occ, max_iter=50, tol=1e-6 )
-#    print(f"CCD correlation energy: {e_ccd:.6f} MeV")
-#    print(f"Total CCD energy: {no_ham.E0 + e_ccd:.6f} MeV")
-#    
-#
-#    print("\n--- 6a. Performing CCSD ")
-#    e_corr_ccsd, t1_ccsd, t2_ccsd = ccsd_diis_solver(no_ham, n_occ, max_iter=50)
-#    print(f"CCSD Correlation Energy: {e_corr_ccsd:.6f} MeV")
-#    print(f"Total CCSD Energy: {no_ham.E0 + e_corr_ccsd:.6f} MeV")
+    print("\n--- CCD ---")
+    e_ccd, t2_ccd = ccd_diis_solver(no_ham, n_occ, max_iter=50, tol=1e-6 )
+    print(f"CCD correlation energy: {e_ccd:.6f} MeV")
+    print(f"Total CCD energy: {no_ham.E0 + e_ccd:.6f} MeV")
+    
+
+    print("\n--- 6a. Performing CCSD ")
+    e_corr_ccsd, t1_ccsd, t2_ccsd = ccsd_diis_solver(no_ham, n_occ, max_iter=50)
+    print(f"CCSD Correlation Energy: {e_corr_ccsd:.6f} MeV")
+    print(f"Total CCSD Energy: {no_ham.E0 + e_corr_ccsd:.6f} MeV")
 #
 #
 #    print("\n--- 6b. Performing CCSDT ")
